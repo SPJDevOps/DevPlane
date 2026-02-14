@@ -1,0 +1,82 @@
+package gateway
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"time"
+
+	"github.com/go-logr/logr"
+	"github.com/gorilla/websocket"
+)
+
+const ttydPort = 7681
+
+var upgrader = websocket.Upgrader{
+	HandshakeTimeout: 10 * time.Second,
+	// Origin validation is handled by the OIDC auth layer before we get here.
+	CheckOrigin: func(_ *http.Request) bool { return true },
+}
+
+// Proxy upgrades an HTTP request to WebSocket and bidirectionally proxies
+// frames to a backend workspace pod.
+type Proxy struct {
+	log logr.Logger
+}
+
+// NewProxy creates a Proxy that uses log for structured logging.
+func NewProxy(log logr.Logger) *Proxy {
+	return &Proxy{log: log}
+}
+
+// ServeWS upgrades r to WebSocket and proxies traffic to backendURL.
+// It blocks until either side closes the connection.
+func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL string) error {
+	clientConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return fmt.Errorf("upgrade client connection: %w", err)
+	}
+	defer clientConn.Close()
+
+	backendConn, _, err := websocket.DefaultDialer.DialContext(r.Context(), backendURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial backend %q: %w", backendURL, err)
+	}
+	defer backendConn.Close()
+
+	p.log.Info("WebSocket tunnel open", "backend", backendURL)
+
+	errc := make(chan error, 2)
+	go copyFrames(clientConn, backendConn, errc)
+	go copyFrames(backendConn, clientConn, errc)
+
+	err = <-errc
+	p.log.Info("WebSocket tunnel closed", "backend", backendURL, "reason", err)
+	return nil
+}
+
+// BackendURL builds the WebSocket URL for a workspace pod's ttyd service.
+func BackendURL(serviceEndpoint string) string {
+	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("%s:%d", serviceEndpoint, ttydPort)}
+	return u.String()
+}
+
+// copyFrames reads WebSocket frames from src and writes them to dst.
+// On a normal close it propagates the close handshake to dst before returning.
+func copyFrames(dst, src *websocket.Conn, errc chan<- error) {
+	for {
+		msgType, data, err := src.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				_ = dst.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			}
+			errc <- err
+			return
+		}
+		if err := dst.WriteMessage(msgType, data); err != nil {
+			errc <- err
+			return
+		}
+	}
+}

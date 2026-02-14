@@ -1,0 +1,48 @@
+# ── Compiled binaries ─────────────────────────────────────────────────────────
+bin/
+dist/
+__debug_bin
+
+# ── Test output ───────────────────────────────────────────────────────────────
+cover.out
+*.test
+
+# ── Go toolchain ──────────────────────────────────────────────────────────────
+vendor/
+# Go workspace files (local multi-module dev, not shared)
+go.work
+go.work.sum
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Kubernetes / kubebuilder ──────────────────────────────────────────────────
+# Local kubeconfig — never commit credentials
+kubeconfig
+*.kubeconfig
+# envtest binaries downloaded by setup-envtest
+testbin/
+
+# ── Helm ──────────────────────────────────────────────────────────────────────
+deploy/helm/*/charts/
+deploy/helm/*/*.tgz
+
+# ── Secrets / credentials ─────────────────────────────────────────────────────
+*.env
+.env*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+
+# ── Claude Code internal state ────────────────────────────────────────────────
+.claude/

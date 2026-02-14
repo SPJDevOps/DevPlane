@@ -1,0 +1,34 @@
+# Default values for workspace-operator.
+# Deploy: helm install workspace-operator . -n workspace-operator-system --create-namespace
+
+operator:
+  image: workspace-operator:latest
+  replicas: 1
+  resources: {}
+
+gateway:
+  image: workspace-gateway:latest
+  replicas: 2
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    clientSecret: ""
+  ingress:
+    enabled: true
+    host: devplane.company.com
+
+workspace:
+  image: workspace:latest
+  defaultResources:
+    cpu: "2"
+    memory: "4Gi"
+    storage: "20Gi"
+  storageClass: "standard"
+  ai:
+    vllmEndpoint: "http://vllm.ai-system.svc:8000"
+    vllmModel: "deepseek-coder-33b-instruct"
+
+networkPolicy:
+  enabled: true
+  allowedEgressNamespaces:
+    - ai-system

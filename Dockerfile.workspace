@@ -1,0 +1,58 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/usr/local/go/bin:$PATH"
+
+ARG KUBECTL_VERSION=1.29.3
+ARG HELM_VERSION=3.14.4
+ARG K9S_VERSION=0.32.5
+ARG GO_VERSION=1.21.13
+ARG NODE_MAJOR=20
+# TARGETARCH is set automatically by BuildKit (amd64 or arm64).
+ARG TARGETARCH
+
+# ── Base packages ────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+        git zsh tmux ttyd \
+        python3 python3-pip python3-psutil \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── kubectl ──────────────────────────────────────────────────────────────────
+RUN curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+        -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
+
+# ── Helm ─────────────────────────────────────────────────────────────────────
+RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
+        | tar -xz --strip-components=1 -C /usr/local/bin "linux-${TARGETARCH}/helm"
+
+# ── k9s ──────────────────────────────────────────────────────────────────────
+RUN curl -fsSL "https://github.com/derailed/k9s/releases/download/v${K9S_VERSION}/k9s_Linux_${TARGETARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin k9s
+
+# ── Go ───────────────────────────────────────────────────────────────────────
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
+        | tar -xz -C /usr/local
+
+# ── Node.js ──────────────────────────────────────────────────────────────────
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── OpenCoder (open-interpreter, configured via VLLM_ENDPOINT + VLLM_MODEL) ──
+RUN pip3 install --no-cache-dir --break-system-packages open-interpreter
+
+# ── Non-root user (UID 1000) ──────────────────────────────────────────────────
+# Ubuntu 24.04 ships an 'ubuntu' user at UID/GID 1000; rename and reconfigure it.
+# Home is set to /workspace so $HOME resolves to the mounted PVC at runtime.
+RUN groupmod -n devuser ubuntu \
+    && usermod -l devuser -d /workspace -s /usr/bin/zsh ubuntu \
+    && mkdir -p /workspace && chown 1000:1000 /workspace
+
+COPY hack/entrypoint.sh /entrypoint.sh
+RUN chmod 555 /entrypoint.sh
+
+USER 1000
+WORKDIR /workspace
+ENTRYPOINT ["/entrypoint.sh"]

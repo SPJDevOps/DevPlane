@@ -1,0 +1,9 @@
+# This kustomization.yaml is not intended to be run by itself,
+# since it requires a name and namespace.
+# Run 'kubectl kustomize config/crd' to get the generated CRD.
+resources:
+  - bases/workspace.devplane.io_workspaces.yaml
+#+kubebuilder:scaffold:crdkustomizeresource
+
+patchesStrategicMerge:
+#+kubebuilder:scaffold:crdkustomizepatch

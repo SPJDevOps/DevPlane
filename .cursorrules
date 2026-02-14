@@ -1,0 +1,289 @@
+# AI-Powered Workspace Operator - Cursor Rules
+
+## Project Purpose
+Building a Kubernetes operator that provides AI-assisted development workspaces for restricted/air-gapped environments. Users authenticate via OIDC, get isolated terminal sessions with persistent storage, and pre-configured AI coding assistants (OpenCoder) connected to internal vLLM endpoints.
+
+## Core Use Cases
+1. DevOps engineers writing scripts/working on MRs in air-gapped environments
+2. Developers understanding existing projects via AI assistant
+3. Developers planning implementations with AI, then pushing to git
+4. Data scientists writing Python scripts with AI assistance
+
+## Architecture Overview
+
+### Components
+- **Operator**: Kubernetes controller managing Workspace CRDs (Go, controller-runtime)
+- **Gateway**: OIDC auth + WebSocket proxy to user pods (Go, net/http)
+- **Workspace Pod**: Ubuntu-based container with dev tools + OpenCoder + tmux + ttyd
+- **Storage**: Per-user PVC (RWO, 20Gi default) for persistent home directory
+
+### Tech Stack
+- **Language**: Go 1.21+ for operator and gateway
+- **Framework**: kubebuilder v3 for operator scaffolding
+- **K8s Client**: controller-runtime, client-go
+- **Auth**: OIDC via oauth2-proxy or go-oidc library
+- **WebSocket**: gorilla/websocket for proxying
+- **Terminal**: ttyd serving tmux sessions
+- **Container Base**: Ubuntu 24.04
+- **AI Integration**: OpenCoder CLI pre-installed, configured via env vars
+
+### Deployment Model
+- Single Helm chart deploys: operator, gateway, CRDs, RBAC
+- Operator watches Workspace CRs, creates: Pod + PVC + Service + ServiceAccount + RoleBinding
+- Users access via: https://devplane.company.com → Gateway → User Pod
+
+## Coding Standards
+
+### Go Code
+- Follow effective Go and Go proverbs
+- Use controller-runtime patterns (reconcile loops, predicates, owner references)
+- Structured logging with logr (controller-runtime default)
+- Errors: wrap with fmt.Errorf("context: %w", err) for stack traces
+- Context: always pass ctx from reconcile, use context.WithTimeout for external calls
+- No naked returns in functions >10 lines
+- Exported functions must have godoc comments
+
+### Kubernetes Resources
+- All resources created by operator MUST have OwnerReferences to parent Workspace CR
+- Use labels consistently: `app: workspace`, `user: <user-id>`, `managed-by: workspace-operator`
+- Name resources predictably: `<user-id>-workspace-pod`, `<user-id>-workspace-pvc`
+- Set resource requests/limits on all pods
+- Use typed clients (client.Client) over dynamic clients
+
+### Security Principles (CRITICAL)
+- **Least Privilege**: Every ServiceAccount gets minimal RBAC needed
+- **Pod Security**: All workspace pods run with:
+  - `runAsNonRoot: true`
+  - `runAsUser: 1000`
+  - `readOnlyRootFilesystem: true` (except mounted volumes)
+  - `allowPrivilegeEscalation: false`
+  - `capabilities: drop: ["ALL"]`
+  - `seccompProfile: type: RuntimeDefault`
+- **Network Isolation**: NetworkPolicies deny-all by default, allow specific egress
+- **No Docker/Privileged**: Workspace pods do NOT need Docker daemon or privileged mode
+- **API Key Storage**: User-provided API keys stored in /workspace/.config (on PVC), never in secrets
+
+### File Structure
+```
+workspace-operator/
+├── .cursorrules                 # This file
+├── README.md
+├── ARCHITECTURE.md              # Generated first
+├── Dockerfile.workspace         # Workspace pod image
+├── Dockerfile.gateway           # Gateway service image
+├── Makefile                     # Build, test, deploy targets
+├── go.mod
+├── go.sum
+├── main.go                      # Operator entrypoint
+├── cmd/
+│   └── gateway/
+│       └── main.go              # Gateway service entrypoint
+├── api/
+│   └── v1alpha1/
+│       ├── workspace_types.go   # CRD definition
+│       └── zz_generated.deepcopy.go
+├── controllers/
+│   └── workspace_controller.go  # Reconciliation logic
+├── pkg/
+│   ├── gateway/                 # Gateway HTTP handlers
+│   │   ├── auth.go             # OIDC validation
+│   │   ├── proxy.go            # WebSocket proxy
+│   │   └── lifecycle.go        # Workspace create/get
+│   └── security/                # Security helpers
+│       ├── rbac.go             # Generate RBAC resources
+│       └── netpol.go           # Generate NetworkPolicies
+├── config/
+│   ├── crd/                     # CRD manifests
+│   ├── rbac/                    # Operator RBAC
+│   ├── manager/                 # Operator deployment
+│   └── samples/                 # Example Workspace CRs
+├── hack/
+│   └── entrypoint.sh            # Workspace pod entrypoint
+├── deploy/
+│   └── helm/
+│       └── workspace-operator/  # Helm chart
+│           ├── Chart.yaml
+│           ├── values.yaml
+│           └── templates/
+└── test/
+    ├── e2e/                     # End-to-end tests
+    └── integration/             # Integration tests
+```
+
+### Naming Conventions
+- Go files: snake_case (workspace_controller.go)
+- Go packages: lowercase, no underscores (gateway, security)
+- CRD names: PascalCase (Workspace)
+- CRD fields: camelCase in YAML, PascalCase in Go structs
+- K8s resource names: kebab-case (workspace-operator, john-workspace-pod)
+- Env vars: UPPER_SNAKE_CASE (VLLM_ENDPOINT, VLLM_MODEL)
+
+### Error Handling Patterns
+```go
+// In reconcile loops:
+if err := r.ensureResource(ctx, resource); err != nil {
+    log.Error(err, "Failed to ensure resource", "type", resource.GetObjectKind())
+    return ctrl.Result{}, err  // Requeue
+}
+
+// For retryable failures:
+if !isPodReady(pod) {
+    log.Info("Pod not ready, requeuing", "pod", pod.Name)
+    return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// For non-retryable errors:
+if validationErr := validateWorkspace(workspace); validationErr != nil {
+    log.Error(validationErr, "Invalid workspace spec")
+    r.updateStatus(ctx, workspace, "Failed", validationErr.Error())
+    return ctrl.Result{}, nil  // Don't requeue
+}
+```
+
+### Testing Requirements
+- Unit tests for all business logic (>70% coverage goal)
+- Integration tests for operator reconciliation
+- E2E tests for full workflow (auth → workspace creation → WebSocket connection)
+- Use envtest for testing against fake K8s API
+- Mock vLLM endpoints in tests
+
+## Development Workflow
+
+### Phase 1: Foundation (Week 1)
+1. Scaffold operator with kubebuilder
+2. Define Workspace CRD with full spec
+3. Implement basic reconcile loop (create Pod, PVC, Service)
+4. Create Dockerfile for workspace pod
+5. Manual test: create Workspace CR, verify pod starts
+
+### Phase 2: Gateway (Week 2)
+1. Build gateway service with OIDC validation
+2. Implement workspace lifecycle API (create/get Workspace CR)
+3. Add WebSocket proxy to user pods
+4. Test: authenticate, create workspace, connect to terminal
+
+### Phase 3: Polish (Week 3-4)
+1. Add NetworkPolicies, RBAC for workspace pods
+2. Implement status updates, error handling
+3. Create Helm chart
+4. Write documentation (README, ARCHITECTURE)
+5. E2E testing
+
+### Iteration Rules
+- Commit after each working component
+- Write tests before moving to next feature
+- Update ARCHITECTURE.md when design changes
+- Run `make test` before every commit
+- Run `make lint` (golangci-lint) before every commit
+
+## Code Generation
+When asked to generate code, always:
+1. Include full imports
+2. Add godoc comments for exported types/functions
+3. Include basic error handling
+4. Use structured logging (log.Info, log.Error)
+5. Follow K8s API conventions (metav1.TypeMeta, metav1.ObjectMeta)
+6. Generate corresponding tests in _test.go files
+
+## Anti-Patterns to Avoid
+❌ Don't use dynamic clients when typed clients exist
+❌ Don't use sleeps for synchronization (use watch/informers)
+❌ Don't store state in operator (stateless reconciliation)
+❌ Don't create resources without OwnerReferences (orphans)
+❌ Don't log sensitive data (API keys, tokens)
+❌ Don't use `latest` tags in production
+❌ Don't mix business logic into controller.go (use pkg/)
+❌ Don't create privileged pods for workspace users
+❌ Don't assume resources exist (always check errors)
+❌ Don't use string concatenation for resource names (use fmt.Sprintf)
+
+## Performance Considerations
+- Use predicates to filter unnecessary reconciliations
+- Implement rate limiting for workspace creation (prevent abuse)
+- Use caching for OIDC token validation (5min TTL)
+- Lazy-load workspace pods (create on first access, stop after 24h idle)
+- Use headless services (no kube-proxy overhead)
+
+## Security Checklist (Review Before Each PR)
+- [ ] All workspace pods run as non-root
+- [ ] ReadOnlyRootFilesystem enabled (except volumes)
+- [ ] No privileged escalation allowed
+- [ ] Capabilities dropped
+- [ ] NetworkPolicies defined and tested
+- [ ] RBAC is least-privilege
+- [ ] No secrets in env vars (use volumes or PVC)
+- [ ] Input validation on user-provided fields
+- [ ] Rate limiting on workspace creation
+
+## Documentation Standards
+- README.md: Installation, quickstart, prerequisites
+- ARCHITECTURE.md: Design decisions, component diagram, data flow
+- Each package: package-level godoc
+- Helm chart: Detailed values.yaml comments
+- Include troubleshooting section in README
+
+## Kubernetes Version Support
+- Target: K8s 1.27+
+- Test against: 1.27, 1.28, 1.29
+- Use stable APIs (v1, apps/v1, rbac.authorization.k8s.io/v1)
+- Avoid deprecated APIs
+
+## Environment Variables (Workspace Pod)
+- VLLM_ENDPOINT: vLLM service URL (injected by operator)
+- VLLM_MODEL: Model name (injected by operator)
+- USER_EMAIL: User's email from OIDC (injected by operator)
+- USER_ID: Sanitized username (injected by operator)
+
+## Helm Chart Values Structure
+```yaml
+operator:
+  image: workspace-operator:latest
+  replicas: 1
+  resources: {}
+
+gateway:
+  image: workspace-gateway:latest
+  replicas: 2
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    clientSecret: ""
+  ingress:
+    enabled: true
+    host: devplane.company.com
+
+workspace:
+  image: workspace:latest
+  defaultResources:
+    cpu: "2"
+    memory: "4Gi"
+    storage: "20Gi"
+  storageClass: "standard"
+  ai:
+    vllmEndpoint: "http://vllm.ai-system.svc:8000"
+    vllmModel: "deepseek-coder-33b-instruct"
+
+networkPolicy:
+  enabled: true
+  allowedEgressNamespaces:
+    - ai-system
+```
+
+## When Stuck
+1. Check kubebuilder book: https://book.kubebuilder.io
+2. Check controller-runtime examples
+3. Review Kubernetes API conventions
+4. Ask for specific error messages + relevant code
+5. Break problem into smaller pieces
+
+## Success Criteria
+- [ ] User can log in via OIDC
+- [ ] Workspace pod starts within 30 seconds
+- [ ] Terminal is accessible via browser
+- [ ] Git clone + OpenCoder works
+- [ ] User data persists across pod restarts
+- [ ] NetworkPolicies block cross-user traffic
+- [ ] Helm install works in fresh cluster
+- [ ] Documentation is complete
+
+Remember: Security and simplicity over features. Build for air-gapped DevOps engineers first, expand later.

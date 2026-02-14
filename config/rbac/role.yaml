@@ -1,0 +1,56 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+  labels:
+    app.kubernetes.io/name: workspace-operator
+rules:
+- apiGroups:
+  - workspace.devplane.io
+  resources:
+  - workspaces
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - workspace.devplane.io
+  resources:
+  - workspaces/status
+  - workspaces/finalizers
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - persistentvolumeclaims
+  - services
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete

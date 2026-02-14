@@ -1,0 +1,23 @@
+apiVersion: workspace.devplane.io/v1alpha1
+kind: Workspace
+metadata:
+  name: workspace-sample
+  namespace: default
+  labels:
+    app: workspace
+    user: john
+    managed-by: devplane
+spec:
+  user:
+    id: john
+    email: john@example.com
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+    storage: "20Gi"
+  aiConfig:
+    defaultProvider: vllm
+    vllmEndpoint: "http://vllm.ai-system.svc.cluster.local:8000"
+    vllmModel: deepseek-coder-33b-instruct
+  persistence:
+    storageClass: standard

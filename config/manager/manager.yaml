@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: workspace-operator
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+        app.kubernetes.io/name: workspace-operator
+    spec:
+      serviceAccountName: controller-manager
+      containers:
+      - name: manager
+        image: controller:latest
+        args:
+        - --leader-elect
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+            - ALL
+      terminationGracePeriodSeconds: 10

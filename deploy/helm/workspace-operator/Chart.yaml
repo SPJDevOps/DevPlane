@@ -1,0 +1,12 @@
+apiVersion: v2
+name: workspace-operator
+description: AI-powered development workspaces for air-gapped environments
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - workspace
+  - kubernetes
+  - operator
+  - ai
+maintainers: []
