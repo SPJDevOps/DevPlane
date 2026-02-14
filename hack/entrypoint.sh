@@ -9,24 +9,34 @@ set -euo pipefail
 # every start. SSH will silently ignore keys with wrong permissions.
 if [ -d "${HOME}/.ssh" ]; then
   chmod 700 "${HOME}/.ssh"
-  find "${HOME}/.ssh" -type f                       -exec chmod 600 {} \;
-  find "${HOME}/.ssh" -name "*.pub"                 -exec chmod 644 {} \;
-  find "${HOME}/.ssh" -name "authorized_keys"       -exec chmod 644 {} \;
-  find "${HOME}/.ssh" -name "known_hosts"           -exec chmod 644 {} \;
+  find "${HOME}/.ssh" -type f                 -exec chmod 600 {} \;
+  find "${HOME}/.ssh" -name "*.pub"           -exec chmod 644 {} \;
+  find "${HOME}/.ssh" -name "authorized_keys" -exec chmod 644 {} \;
+  find "${HOME}/.ssh" -name "known_hosts"     -exec chmod 644 {} \;
 fi
 if [ -f "${HOME}/.kube/config" ]; then
   chmod 600 "${HOME}/.kube/config"
 fi
 
-# ── OpenCoder ─────────────────────────────────────────────────────────────────
+# ── opencode ──────────────────────────────────────────────────────────────────
 # Rewritten on every start so changes to env vars (e.g. new vLLM endpoint)
 # are always reflected without manual intervention.
-mkdir -p "${HOME}/.config/open-interpreter"
-cat > "${HOME}/.config/open-interpreter/config.yaml" <<EOF
-llm:
-  api_base: "${VLLM_ENDPOINT}/v1"
-  model: "${VLLM_MODEL}"
-  api_key: "no-key-required"
+# Config reference: https://github.com/opencode-ai/opencode
+cat > "${HOME}/.opencode.json" <<EOF
+{
+  "providers": {
+    "local": {
+      "endpoint": "${VLLM_ENDPOINT}/v1",
+      "apiKey": "no-key-required"
+    }
+  },
+  "agents": {
+    "coder": {
+      "model": "local/${VLLM_MODEL}",
+      "maxTokens": 8192
+    }
+  }
+}
 EOF
 
 # ── Git identity ──────────────────────────────────────────────────────────────
@@ -54,15 +64,15 @@ fi
 cat > /tmp/welcome.txt <<EOF
 
   ╔══════════════════════════════════════════════════════╗
-  ║         KubeSpace AI  —  Development Workspace       ║
+  ║           DevPlane  —  Development Workspace         ║
   ╚══════════════════════════════════════════════════════╝
 
   User:     ${USER_ID:-unknown}
   AI model: ${VLLM_MODEL:-not configured}
   Endpoint: ${VLLM_ENDPOINT:-not configured}
 
-  Tools: kubectl  helm  k9s  go  node  python3  git  interpreter
-  Type 'interpreter' to start the AI assistant.
+  Tools: kubectl  helm  k9s  go  node  python3  git  opencode
+  Type 'opencode' to start the AI assistant.
 
 EOF
 
