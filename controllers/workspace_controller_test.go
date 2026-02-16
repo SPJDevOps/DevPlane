@@ -130,9 +130,9 @@ func TestReconcile_Integration(t *testing.T) {
 	}
 
 	reconciler := &WorkspaceReconciler{
-		Client:          k8sClient,
-		Scheme:          testScheme,
-		WorkspaceImage:  "workspace:test",
+		Client:         k8sClient,
+		Scheme:         testScheme,
+		WorkspaceImage: "workspace:test",
 	}
 
 	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}

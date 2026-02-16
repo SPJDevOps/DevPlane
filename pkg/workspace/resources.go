@@ -58,7 +58,7 @@ func BuildPVC(workspace *workspacev1alpha1.Workspace, scheme *runtime.Scheme) (*
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.ResourceRequirements{
+			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: resource.MustParse(workspace.Spec.Resources.Storage),
 				},

@@ -23,6 +23,10 @@ GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo "$(GOBIN)/golan
 KUSTOMIZE ?= $(shell which kustomize 2>/dev/null || echo "$(GOBIN)/kustomize")
 ENVTEST ?= $(shell which setup-envtest 2>/dev/null || echo "$(GOBIN)/setup-envtest")
 
+# Envtest: directory for etcd/kube-apiserver binaries; K8s version from k8s.io/api.
+LOCALBIN ?= $(CURDIR)/testbin
+ENVTEST_K8S_VERSION ?= $(shell go list -m -f '{{ .Version }}' k8s.io/api 2>/dev/null | awk -F'[v.]' '{printf "1.%d", $$3}')
+
 # Default target.
 all: build
 
@@ -49,8 +53,12 @@ vet:
 	go vet ./...
 
 .PHONY: test
-test: fmt vet
-	go test ./... -coverprofile=cover.out
+test: fmt vet setup-envtest ## Run all tests (downloads envtest binaries on first run).
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -i --bin-dir $(LOCALBIN) -p path 2>/dev/null)" go test ./... -coverprofile=cover.out
+
+.PHONY: test-short
+test-short: fmt vet ## Run tests excluding envtest integration tests (no etcd/kube-apiserver needed).
+	go test -short ./... -coverprofile=cover.out
 
 .PHONY: build
 build: fmt vet
@@ -122,6 +130,11 @@ envtest:
 		echo "Installing setup-envtest"; \
 		go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest; \
 	fi
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Download etcd and kube-apiserver binaries for envtest integration tests.
+	@echo "Setting up envtest binaries for Kubernetes $(ENVTEST_K8S_VERSION)..."
+	@$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path
 
 .PHONY: tidy
 tidy:
