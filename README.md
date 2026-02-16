@@ -1,6 +1,6 @@
-# Workspace Operator
+# DevPlane
 
-A Kubernetes operator that provides **AI-powered development workspaces** for air-gapped and restricted environments. Developers authenticate via OIDC, get isolated terminal sessions with persistent storage, and a pre-configured AI coding assistant (OpenCoder) connected to an in-cluster vLLM endpoint.
+DevPlane is a Kubernetes operator that provides **AI-powered development workspaces** for air-gapped and restricted environments. Developers authenticate via OIDC, get isolated terminal sessions with persistent storage, and a pre-configured AI coding assistant (OpenCoder) connected to an in-cluster vLLM endpoint.
 
 ## Project Overview
 
