@@ -30,6 +30,8 @@ gateway:
     limits:
       cpu: 500m
       memory: 256Mi
+  workspaceNamespace: "workspaces"  # dedicated namespace for user pods/pvcs/services
+  createWorkspaceNamespace: true     # create this namespace as part of helm install
   oidc:
     issuerURL: ""
     clientID: ""

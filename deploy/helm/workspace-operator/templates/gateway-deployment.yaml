@@ -42,9 +42,7 @@ spec:
               name: {{ .Values.gateway.oidc.existingSecret | default (printf "%s-gateway-oidc" .Release.Name) }}
               key: client-id
         - name: NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
+          value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
         - name: VLLM_ENDPOINT
           value: {{ .Values.workspace.ai.vllmEndpoint | quote }}
         - name: VLLM_MODEL

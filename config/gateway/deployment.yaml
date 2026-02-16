@@ -39,9 +39,9 @@ spec:
               name: gateway-oidc
               key: client-id
         - name: NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
+          # Set to the dedicated workspace namespace (e.g. "workspaces") where
+          # user pods, PVCs, and services are created — not the operator namespace.
+          value: "workspaces"
         - name: VLLM_ENDPOINT
           value: "http://vllm.ai-system.svc:8000"
         - name: VLLM_MODEL

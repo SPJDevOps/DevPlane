@@ -1,0 +1,9 @@
+{{- if and .Values.gateway.workspaceNamespace .Values.gateway.createWorkspaceNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.gateway.workspaceNamespace }}
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.gateway.workspaceNamespace }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
