@@ -4,4 +4,5 @@ resources:
   - ../crd
   - ../rbac
   - ../manager
-namespace: system
+  - ../gateway
+namespace: workspace-operator-system

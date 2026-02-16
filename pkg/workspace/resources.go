@@ -74,6 +74,11 @@ func BuildPVC(workspace *workspacev1alpha1.Workspace, scheme *runtime.Scheme) (*
 	return pvc, nil
 }
 
+// ServiceAccountName returns the per-user ServiceAccount name for a user ID.
+func ServiceAccountName(userID string) string {
+	return fmt.Sprintf("%s-workspace", userID)
+}
+
 // BuildPod creates a Pod for the workspace with security context, volume, env, and owner reference.
 func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	userID := workspace.Spec.User.ID
@@ -90,6 +95,7 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 			Labels:    labels,
 		},
 		Spec: corev1.PodSpec{
+			ServiceAccountName: ServiceAccountName(userID),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot: ptr(true),
 				RunAsUser:    ptr(int64(1000)),

@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-gateway
+  namespace: workspace-operator-system
+  labels:
+    app: workspace-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workspace-gateway
+  template:
+    metadata:
+      labels:
+        app: workspace-gateway
+    spec:
+      serviceAccountName: workspace-gateway
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gateway
+        image: workspace-gateway:latest
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: OIDC_ISSUER_URL
+          valueFrom:
+            secretKeyRef:
+              name: gateway-oidc
+              key: issuer-url
+        - name: OIDC_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: gateway-oidc
+              key: client-id
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: VLLM_ENDPOINT
+          value: "http://vllm.ai-system.svc:8000"
+        - name: VLLM_MODEL
+          value: "deepseek-coder-33b-instruct"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 3
+          periodSeconds: 5

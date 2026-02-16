@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-gateway
+  namespace: workspace-operator-system
+  labels:
+    app: workspace-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: workspace-gateway
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP

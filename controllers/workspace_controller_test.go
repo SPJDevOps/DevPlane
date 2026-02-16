@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -150,6 +152,32 @@ func TestReconcile_Integration(t *testing.T) {
 	}
 	if pvc.OwnerReferences[0].Kind != "Workspace" || pvc.OwnerReferences[0].Name != "int-test-ws" {
 		t.Errorf("PVC owner ref: Kind=%s Name=%s", pvc.OwnerReferences[0].Kind, pvc.OwnerReferences[0].Name)
+	}
+
+	// Verify security resources were created (SA, Role, RoleBinding, NetworkPolicies)
+	var sa corev1.ServiceAccount
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace"}, &sa); err != nil {
+		t.Fatalf("Get ServiceAccount: %v", err)
+	}
+	var role rbacv1.Role
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace"}, &role); err != nil {
+		t.Fatalf("Get Role: %v", err)
+	}
+	var rb rbacv1.RoleBinding
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace"}, &rb); err != nil {
+		t.Fatalf("Get RoleBinding: %v", err)
+	}
+	var npDenyAll networkingv1.NetworkPolicy
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace-deny-all"}, &npDenyAll); err != nil {
+		t.Fatalf("Get deny-all NetworkPolicy: %v", err)
+	}
+	var npEgress networkingv1.NetworkPolicy
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace-egress"}, &npEgress); err != nil {
+		t.Fatalf("Get egress NetworkPolicy: %v", err)
+	}
+	var npIngress networkingv1.NetworkPolicy
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "john-workspace-ingress-gateway"}, &npIngress); err != nil {
+		t.Fatalf("Get ingress-gateway NetworkPolicy: %v", err)
 	}
 
 	// Patch PVC to Bound so controller proceeds

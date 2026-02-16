@@ -12,4 +12,4 @@ subjects:
 - apiGroup: ""
   kind: ServiceAccount
   name: controller-manager
-  namespace: system
+  namespace: workspace-operator-system

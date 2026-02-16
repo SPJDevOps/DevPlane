@@ -59,10 +59,15 @@ func main() {
 	if workspaceImage == "" {
 		workspaceImage = "workspace:latest"
 	}
+	vllmNamespace := os.Getenv("VLLM_NAMESPACE")
+	if vllmNamespace == "" {
+		vllmNamespace = "ai-system"
+	}
 	if err = (&controllers.WorkspaceReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		WorkspaceImage:  workspaceImage,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		WorkspaceImage: workspaceImage,
+		VLLMNamespace:  vllmNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller", "controller", "Workspace")
 		os.Exit(1)

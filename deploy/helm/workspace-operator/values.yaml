@@ -2,33 +2,56 @@
 # Deploy: helm install workspace-operator . -n workspace-operator-system --create-namespace
 
 operator:
-  image: workspace-operator:latest
+  image:
+    repository: workspace-operator
+    tag: latest
+    pullPolicy: IfNotPresent
   replicas: 1
-  resources: {}
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+  leaderElect: true
 
 gateway:
-  image: workspace-gateway:latest
+  enabled: true
+  image:
+    repository: workspace-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
   replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
   oidc:
     issuerURL: ""
     clientID: ""
-    clientSecret: ""
+    # Name of an existing Secret with keys issuer-url and client-id.
+    # If set, oidc.issuerURL and oidc.clientID are ignored.
+    existingSecret: ""
   ingress:
-    enabled: true
-    host: devplane.company.com
+    enabled: false
+    className: ""
+    host: devplane.example.com
+    tls: []
 
 workspace:
-  image: workspace:latest
+  image:
+    repository: workspace
+    tag: latest
   defaultResources:
     cpu: "2"
     memory: "4Gi"
     storage: "20Gi"
-  storageClass: "standard"
+  storageClass: ""
   ai:
     vllmEndpoint: "http://vllm.ai-system.svc:8000"
     vllmModel: "deepseek-coder-33b-instruct"
-
-networkPolicy:
-  enabled: true
-  allowedEgressNamespaces:
-    - ai-system
+    vllmNamespace: "ai-system"

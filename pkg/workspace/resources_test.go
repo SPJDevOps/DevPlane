@@ -37,6 +37,12 @@ func TestServiceName(t *testing.T) {
 	}
 }
 
+func TestServiceAccountName(t *testing.T) {
+	if got := ServiceAccountName("john"); got != "john-workspace" {
+		t.Errorf("ServiceAccountName(%q) = %q, want john-workspace", "john", got)
+	}
+}
+
 func TestLabels(t *testing.T) {
 	got := Labels("alice")
 	want := map[string]string{
@@ -169,6 +175,9 @@ func TestBuildPod(t *testing.T) {
 	}
 	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != "Workspace" {
 		t.Errorf("expected Workspace owner reference, got %v", pod.OwnerReferences)
+	}
+	if pod.Spec.ServiceAccountName != "john-workspace" {
+		t.Errorf("pod.Spec.ServiceAccountName = %q, want john-workspace", pod.Spec.ServiceAccountName)
 	}
 }
 
