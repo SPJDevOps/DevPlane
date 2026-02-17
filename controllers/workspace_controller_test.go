@@ -104,7 +104,11 @@ func TestReconcile_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start envtest: %v", err)
 	}
-	defer env.Stop()
+	defer func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("Failed to stop envtest: %v", err)
+		}
+	}()
 
 	k8sClient, err := client.New(cfg, client.Options{Scheme: testScheme})
 	if err != nil {
@@ -263,7 +267,11 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start envtest: %v", err)
 	}
-	defer env.Stop()
+	defer func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("Failed to stop envtest: %v", err)
+		}
+	}()
 
 	k8sClient, err := client.New(cfg, client.Options{Scheme: testScheme})
 	if err != nil {
