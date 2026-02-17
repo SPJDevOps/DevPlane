@@ -44,11 +44,17 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # Install golangci-lint from source using the Go toolchain already set up
+      # above. Because the binary is compiled by the same Go version declared in
+      # go.mod, the internal runtime.Version() check inside golangci-lint always
+      # matches the targeted Go version — avoiding the "build version < targeted
+      # version" error that pre-built release binaries trigger when a new Go
+      # version ships before golangci-lint cuts a new binary release.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m
+        run: golangci-lint run --timeout=5m
 
       - name: Run unit tests (short)
         run: go test -short -race -coverprofile=coverage.out ./...
