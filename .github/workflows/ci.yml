@@ -1,0 +1,62 @@
+# Continuous integration: run on every push to main and on every PR targeting main.
+#
+# Steps:
+#   1. go vet + go fmt check
+#   2. golangci-lint
+#   3. Unit tests (short mode — no envtest binary download, runs in < 60s)
+#
+# Integration tests that require envtest (etcd/kube-apiserver) are intentionally
+# excluded here to keep CI fast; run `make test` locally or in a dedicated job.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Reads the go directive from go.mod automatically.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Run unit tests (short)
+        run: go test -short -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7

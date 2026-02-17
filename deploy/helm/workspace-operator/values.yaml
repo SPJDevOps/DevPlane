@@ -3,7 +3,7 @@
 
 operator:
   image:
-    repository: workspace-operator
+    repository: ghcr.io/spjdevops/devplane/workspace-operator
     tag: latest
     pullPolicy: IfNotPresent
   replicas: 1
@@ -19,7 +19,7 @@ operator:
 gateway:
   enabled: true
   image:
-    repository: workspace-gateway
+    repository: ghcr.io/spjdevops/devplane/workspace-gateway
     tag: latest
     pullPolicy: IfNotPresent
   replicas: 2
@@ -49,7 +49,7 @@ gateway:
 
 workspace:
   image:
-    repository: workspace
+    repository: ghcr.io/spjdevops/devplane/workspace
     tag: latest
   defaultResources:
     cpu: "2"

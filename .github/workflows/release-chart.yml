@@ -1,0 +1,64 @@
+# Package and publish the Helm chart on every v* tag push.
+#
+# What this does:
+#   1. chart-releaser packages deploy/helm/workspace-operator into a .tgz
+#   2. Creates (or updates) a GitHub Release with the .tgz as an asset
+#   3. Updates (or creates) the index.yaml on the gh-pages branch
+#
+# The resulting Helm repository is served via GitHub Pages:
+#   https://<owner>.github.io/<repo>
+#
+# Add the repo once:
+#   helm repo add devplane https://<owner>.github.io/<repo>
+#   helm repo update
+#   helm install workspace-operator devplane/workspace-operator
+#
+# Prerequisites (one-time setup):
+#   - Enable GitHub Pages: Settings → Pages → Deploy from branch: gh-pages / (root)
+#   - The gh-pages branch is created automatically on the first release.
+#   - Ensure the repo is public (or Pages is enabled for private repos).
+
+name: Release Helm chart
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Package and publish chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create GitHub Releases + push to gh-pages
+
+    steps:
+      # fetch-depth: 0 is required so chart-releaser can diff chart versions
+      # across the full commit history.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # chart-releaser-action uses git to push to the gh-pages branch;
+      # configure the identity it will use for that commit.
+      - name: Configure Git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      # Packages the chart, creates a GitHub Release with the .tgz asset,
+      # and updates index.yaml on the gh-pages branch.
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          # charts_dir must contain subdirectories, each being a chart.
+          # deploy/helm/workspace-operator/ is discovered automatically.
+          charts_dir: deploy/helm
+          # Skip packaging if the chart version has already been released.
+          skip_existing: true
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
