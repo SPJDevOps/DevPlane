@@ -18,21 +18,32 @@ if [ -f "${HOME}/.kube/config" ]; then
   chmod 600 "${HOME}/.kube/config"
 fi
 
+# ── Custom CA certificates ────────────────────────────────────────────────────
+# If a custom CA ConfigMap is mounted, concatenate all certs into a single
+# bundle file and set env vars so Go, curl, Python, and Node.js trust them.
+if [ "${CUSTOM_CA_MOUNTED:-}" = "true" ] && [ -d /etc/ssl/certs/custom ]; then
+  cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/custom/*.crt \
+      /etc/ssl/certs/custom/*.pem 2>/dev/null > /tmp/ca-bundle.crt || true
+  export SSL_CERT_FILE=/tmp/ca-bundle.crt
+  export REQUESTS_CA_BUNDLE=/tmp/ca-bundle.crt
+  export NODE_EXTRA_CA_CERTS=/tmp/ca-bundle.crt
+fi
+
 # ── opencode ──────────────────────────────────────────────────────────────────
-# Rewritten on every start so changes to env vars (e.g. new vLLM endpoint)
+# Rewritten on every start so changes to env vars (e.g. new LLM endpoint)
 # are always reflected without manual intervention.
 # Config reference: https://github.com/opencode-ai/opencode
 cat > "${HOME}/.opencode.json" <<EOF
 {
   "providers": {
     "local": {
-      "endpoint": "${VLLM_ENDPOINT}/v1",
+      "endpoint": "${OPENAI_BASE_URL}/v1",
       "apiKey": "no-key-required"
     }
   },
   "agents": {
     "coder": {
-      "model": "local/${VLLM_MODEL}",
+      "model": "local/${MODEL_NAME}",
       "maxTokens": 8192
     }
   }
@@ -68,8 +79,8 @@ cat > /tmp/welcome.txt <<EOF
   ╚══════════════════════════════════════════════════════╝
 
   User:     ${USER_ID:-unknown}
-  AI model: ${VLLM_MODEL:-not configured}
-  Endpoint: ${VLLM_ENDPOINT:-not configured}
+  AI model: ${MODEL_NAME:-not configured}
+  Endpoint: ${OPENAI_BASE_URL:-not configured}
 
   Tools: kubectl  helm  k9s  go  node  python3  git  opencode
   Type 'opencode' to start the AI assistant.

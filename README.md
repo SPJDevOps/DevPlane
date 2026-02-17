@@ -124,12 +124,35 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for:
 - `deploy/helm/workspace-operator/` — Helm chart
 - `hack/` — Boilerplate and workspace entrypoint script
 
+## NetworkPolicy — Configurable Egress Ports
+
+Each workspace pod gets three NetworkPolicies: deny-all, ingress-from-gateway, and an egress policy. The egress policy allows:
+
+- DNS (port 53 UDP/TCP) to `kube-system`
+- Any port to in-cluster LLM namespaces (e.g. `ai-system`)
+- A configurable list of TCP ports to external IPs (`0.0.0.0/0`)
+
+The default external port list is `22, 80, 443, 5000, 8000, 8080, 8081, 11434`:
+
+| Port | Purpose |
+|------|---------|
+| 22 | Git over SSH |
+| 80, 443 | HTTP / HTTPS |
+| 5000 | Self-hosted Docker registry |
+| 8000 | vLLM (bare-metal or in-cluster) |
+| 8080, 8081 | Nexus, Artifactory, generic alt-HTTP |
+| 11434 | Ollama |
+
+Override operator-wide via `values.yaml` (`workspace.ai.egressPorts`) or per-workspace via `spec.aiConfig.egressPorts`. Changes take effect on the next reconcile without requiring deletion of the existing policy.
+
 ## Troubleshooting
 
 - **CRD not found**: Run `make manifests` and install the CRDs from `config/crd/bases/` (or via `config/default` with `make deploy`).
 - **Operator not reconciling**: Check operator logs and that the manager has RBAC to read/write Workspaces, Pods, PVCs, and Services.
 - **Pod stays Pending**: Check PVC binding and StorageClass; ensure no resource quota or scheduler issues.
 - **Gateway cannot create Workspace**: Ensure the Gateway’s ServiceAccount has RBAC to create/update Workspace CRs and to read their status.
+- **Workspace cannot reach external service**: Verify the required port is in `egressPorts` (`kubectl get networkpolicy <userid>-workspace-egress -n workspaces -o yaml`).
+- **Workspace cannot reach in-cluster LLM**: Ensure the LLM namespace is listed in `egressNamespaces`.
 
 ## License
 

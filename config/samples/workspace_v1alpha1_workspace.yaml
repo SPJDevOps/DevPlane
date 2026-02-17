@@ -16,8 +16,7 @@ spec:
     memory: "4Gi"
     storage: "20Gi"
   aiConfig:
-    defaultProvider: vllm
-    vllmEndpoint: "http://vllm.ai-system.svc.cluster.local:8000"
-    vllmModel: deepseek-coder-33b-instruct
+    endpoint: "http://vllm.ai-system.svc.cluster.local:8000"
+    model: deepseek-coder-33b-instruct
   persistence:
     storageClass: standard

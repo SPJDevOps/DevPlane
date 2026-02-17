@@ -138,8 +138,8 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 						},
 					},
 					Env: []corev1.EnvVar{
-						{Name: "VLLM_ENDPOINT", Value: workspace.Spec.AIConfig.VLLMEndpoint},
-						{Name: "VLLM_MODEL", Value: workspace.Spec.AIConfig.VLLMModel},
+						{Name: "OPENAI_BASE_URL", Value: workspace.Spec.AIConfig.Endpoint},
+						{Name: "MODEL_NAME", Value: workspace.Spec.AIConfig.Model},
 						{Name: "USER_EMAIL", Value: workspace.Spec.User.Email},
 						{Name: "USER_ID", Value: workspace.Spec.User.ID},
 					},
@@ -161,6 +161,27 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 			},
 		},
 	}
+	if workspace.Spec.TLS.CustomCABundle != nil && workspace.Spec.TLS.CustomCABundle.Name != "" {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: "custom-ca-certs",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: workspace.Spec.TLS.CustomCABundle.Name,
+					},
+				},
+			},
+		})
+		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      "custom-ca-certs",
+			MountPath: "/etc/ssl/certs/custom",
+			ReadOnly:  true,
+		})
+		pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env,
+			corev1.EnvVar{Name: "CUSTOM_CA_MOUNTED", Value: "true"},
+		)
+	}
+
 	if err := controllerutil.SetControllerReference(workspace, pod, scheme); err != nil {
 		return nil, fmt.Errorf("set Pod owner reference: %w", err)
 	}
@@ -218,11 +239,11 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	if s.Resources.Memory == "" {
 		return errors.New("spec.resources.memory is required")
 	}
-	if s.AIConfig.VLLMEndpoint == "" {
-		return errors.New("spec.aiConfig.vllmEndpoint is required")
+	if s.AIConfig.Endpoint == "" {
+		return errors.New("spec.aiConfig.endpoint is required")
 	}
-	if s.AIConfig.VLLMModel == "" {
-		return errors.New("spec.aiConfig.vllmModel is required")
+	if s.AIConfig.Model == "" {
+		return errors.New("spec.aiConfig.model is required")
 	}
 	return nil
 }

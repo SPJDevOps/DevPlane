@@ -101,7 +101,7 @@ controller-gen:
 		echo "controller-gen found"; \
 	else \
 		echo "Installing controller-gen"; \
-		go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.14.0; \
+		go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.3; \
 	fi
 
 .PHONY: kustomize
@@ -119,7 +119,7 @@ golangci-lint:
 		echo "golangci-lint found"; \
 	else \
 		echo "Installing golangci-lint"; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.55.2; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8; \
 	fi
 
 .PHONY: envtest

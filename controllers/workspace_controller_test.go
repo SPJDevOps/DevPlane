@@ -119,8 +119,8 @@ func TestReconcile_Integration(t *testing.T) {
 				CPU: "100m", Memory: "128Mi", Storage: "1Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				VLLMEndpoint: "http://vllm:8000",
-				VLLMModel:    "model",
+				Endpoint: "http://vllm:8000",
+				Model:    "model",
 			},
 			Persistence: workspacev1alpha1.PersistenceConfig{},
 		},
@@ -275,7 +275,7 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 		Spec: workspacev1alpha1.WorkspaceSpec{
 			User:        workspacev1alpha1.UserInfo{ID: "", Email: "j@example.com"},
 			Resources:   workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "1Gi"},
-			AIConfig:    workspacev1alpha1.AIConfiguration{VLLMEndpoint: "http://x", VLLMModel: "m"},
+			AIConfig:    workspacev1alpha1.AIConfiguration{Endpoint: "http://x", Model: "m"},
 			Persistence: workspacev1alpha1.PersistenceConfig{},
 		},
 	}

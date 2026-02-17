@@ -213,6 +213,8 @@ kubectl get pods,pvc -n workspaces
 | `workspace.ai.vllmEndpoint` | string | `http://vllm.ai-system.svc:8000` | vLLM endpoint injected into workspace pods |
 | `workspace.ai.vllmModel` | string | `deepseek-coder-33b-instruct` | vLLM model name injected into workspace pods |
 | `workspace.ai.vllmNamespace` | string | `ai-system` | Namespace of the vLLM service (used in NetworkPolicy) |
+| `workspace.ai.egressNamespaces` | string | `ai-system` | Comma-separated in-cluster namespaces whose pods workspace pods may reach on any port (LLM services) |
+| `workspace.ai.egressPorts` | string | `22,80,443,5000,8000,8080,8081,11434` | Comma-separated TCP ports allowed for egress to external IPs. Covers SSH (22), HTTP/HTTPS (80/443), Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081), Ollama (11434). Override to suit your environment. |
 
 ---
 
@@ -409,12 +411,26 @@ Common causes:
 ### NetworkPolicy issues
 
 ```bash
-# Verify deny-all policy exists
+# Verify policies exist
 kubectl get networkpolicy -n workspaces
+
+# Inspect the egress policy for a user
+kubectl get networkpolicy <userid>-workspace-egress -n workspaces -o yaml
 
 # Test egress from a workspace pod
 kubectl exec -n workspaces <userid>-workspace-pod -- \
   curl -v http://vllm.ai-system.svc:8000/health
+
+# Test git-over-SSH egress
+kubectl exec -n workspaces <userid>-workspace-pod -- \
+  nc -zv github.com 22
 ```
 
-If the workspace cannot reach vLLM, check that the NetworkPolicy egress rule targets the correct namespace label (`kubernetes.io/metadata.name: ai-system`).
+**Allowed external TCP ports** are controlled by `workspace.ai.egressPorts` in `values.yaml` (operator default) or `spec.aiConfig.egressPorts` on the Workspace CR (per-workspace override). The built-in default list is `22,80,443,5000,8000,8080,8081,11434`.
+
+Changes to `egressPorts` or `egressNamespaces` take effect on the next reconcile — you do not need to delete the existing NetworkPolicy.
+
+If the workspace cannot reach vLLM, verify:
+1. The vLLM service namespace is included in `egressNamespaces`.
+2. The NetworkPolicy egress rule targets the correct namespace label (`kubernetes.io/metadata.name: <ns>`).
+3. If vLLM runs on a bare-metal host outside the cluster, its port must be listed in `egressPorts` and `egressNamespaces` should be left empty (the external IP rule covers it).

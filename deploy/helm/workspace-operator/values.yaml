@@ -38,6 +38,9 @@ gateway:
     # Name of an existing Secret with keys issuer-url and client-id.
     # If set, oidc.issuerURL and oidc.clientID are ignored.
     existingSecret: ""
+  tls:
+    customCABundle:
+      configMapName: ""
   ingress:
     enabled: false
     className: ""
@@ -54,6 +57,11 @@ workspace:
     storage: "20Gi"
   storageClass: ""
   ai:
-    vllmEndpoint: "http://vllm.ai-system.svc:8000"
-    vllmModel: "deepseek-coder-33b-instruct"
-    vllmNamespace: "ai-system"
+    endpoint: "http://vllm.ai-system.svc:8000"
+    model: "deepseek-coder-33b-instruct"
+    egressNamespaces: "ai-system"
+    # egressPorts is a comma-separated list of TCP ports workspace pods are allowed
+    # to reach on external IPs (0.0.0.0/0).  Covers git-over-SSH (22), HTTP/HTTPS
+    # (80/443), Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081),
+    # and Ollama (11434).  Override to restrict or expand as needed.
+    egressPorts: "22,80,443,5000,8000,8080,8081,11434"

@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
 )
@@ -23,6 +24,20 @@ const (
 	// which Kubernetes sets automatically on every namespace since v1.21.
 	dnsNamespace = "kube-system"
 )
+
+// DefaultEgressPorts is the built-in list of TCP ports allowed for outbound
+// traffic to external IPs (0.0.0.0/0).  It is used when neither the Workspace
+// CR nor the operator EGRESS_PORTS env var specifies a list.
+//
+//   - 22    — Git over SSH (git clone git@…)
+//   - 80    — HTTP
+//   - 443   — HTTPS
+//   - 5000  — Docker registry (self-hosted)
+//   - 8000  — vLLM default HTTP port
+//   - 8080  — Artifactory / Nexus / generic HTTP alt
+//   - 8081  — Nexus repository / Artifactory
+//   - 11434 — Ollama default port
+var DefaultEgressPorts = []int32{22, 80, 443, 5000, 8000, 8080, 8081, 11434}
 
 // netpolName returns a deterministic NetworkPolicy name for a user + suffix.
 func netpolName(userID, suffix string) string {
@@ -95,10 +110,55 @@ func BuildDenyAllNetworkPolicy(workspace *workspacev1alpha1.Workspace, scheme *r
 // BuildEgressNetworkPolicy returns a NetworkPolicy that allows workspace pods
 // to reach:
 //   - DNS (UDP+TCP 53) in kube-system
-//   - All pods in vllmNamespace (typically "ai-system")
-//   - The public internet on port 80 and 443
-func BuildEgressNetworkPolicy(workspace *workspacev1alpha1.Workspace, vllmNamespace string, scheme *runtime.Scheme) (*networkingv1.NetworkPolicy, error) {
+//   - All pods in LLM service namespaces (e.g., "ai-system")
+//   - External IPs (0.0.0.0/0) on the provided TCP egressPorts
+//
+// egressPorts must not be empty; callers should fall back to DefaultEgressPorts
+// when neither the Workspace spec nor operator config provides a list.
+// Ports outside the valid range 1–65535 are silently skipped.
+func BuildEgressNetworkPolicy(workspace *workspacev1alpha1.Workspace, llmNamespaces []string, egressPorts []int32, scheme *runtime.Scheme) (*networkingv1.NetworkPolicy, error) {
+	log := log.Log.WithName("security.netpol")
 	userID := workspace.Spec.User.ID
+
+	egressRules := []networkingv1.NetworkPolicyEgressRule{
+		// DNS — UDP and TCP both needed (TCP for large responses / zone transfers).
+		{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: protoPtr(corev1.ProtocolUDP), Port: port(53)},
+				{Protocol: protoPtr(corev1.ProtocolTCP), Port: port(53)},
+			},
+			To: []networkingv1.NetworkPolicyPeer{namespaceSelectorByName(dnsNamespace)},
+		},
+	}
+
+	// LLM services — all pods in configured namespaces, any port.
+	if len(llmNamespaces) > 0 {
+		peers := make([]networkingv1.NetworkPolicyPeer, len(llmNamespaces))
+		for i, ns := range llmNamespaces {
+			peers[i] = namespaceSelectorByName(ns)
+		}
+		egressRules = append(egressRules, networkingv1.NetworkPolicyEgressRule{To: peers})
+	}
+
+	// External IPs — TCP on configurable port list (SSH, HTTP, HTTPS, registries, LLMs, etc.).
+	var internetPorts []networkingv1.NetworkPolicyPort
+	for _, p := range egressPorts {
+		if p < 1 || p > 65535 {
+			log.Info("Skipping invalid egress port", "port", p)
+			continue
+		}
+		internetPorts = append(internetPorts, networkingv1.NetworkPolicyPort{
+			Protocol: protoPtr(corev1.ProtocolTCP),
+			Port:     port(int(p)),
+		})
+	}
+	egressRules = append(egressRules, networkingv1.NetworkPolicyEgressRule{
+		Ports: internetPorts,
+		To: []networkingv1.NetworkPolicyPeer{
+			{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}},
+		},
+	})
+
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      netpolName(userID, "egress"),
@@ -112,30 +172,7 @@ func BuildEgressNetworkPolicy(workspace *workspacev1alpha1.Workspace, vllmNamesp
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: workspacePodSelector(userID),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				// DNS — UDP and TCP both needed (TCP for large responses / zone transfers).
-				{
-					Ports: []networkingv1.NetworkPolicyPort{
-						{Protocol: protoPtr(corev1.ProtocolUDP), Port: port(53)},
-						{Protocol: protoPtr(corev1.ProtocolTCP), Port: port(53)},
-					},
-					To: []networkingv1.NetworkPolicyPeer{namespaceSelectorByName(dnsNamespace)},
-				},
-				// vLLM — all pods in the ai-system namespace, any port.
-				{
-					To: []networkingv1.NetworkPolicyPeer{namespaceSelectorByName(vllmNamespace)},
-				},
-				// Internet — HTTP and HTTPS to any IP (git clone, package downloads, etc.).
-				{
-					Ports: []networkingv1.NetworkPolicyPort{
-						{Protocol: protoPtr(corev1.ProtocolTCP), Port: port(80)},
-						{Protocol: protoPtr(corev1.ProtocolTCP), Port: port(443)},
-					},
-					To: []networkingv1.NetworkPolicyPeer{
-						{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}},
-					},
-				},
-			},
+			Egress:      egressRules,
 		},
 	}
 	if err := controllerutil.SetControllerReference(workspace, np, scheme); err != nil {

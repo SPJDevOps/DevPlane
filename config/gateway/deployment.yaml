@@ -42,9 +42,9 @@ spec:
           # Set to the dedicated workspace namespace (e.g. "workspaces") where
           # user pods, PVCs, and services are created — not the operator namespace.
           value: "workspaces"
-        - name: VLLM_ENDPOINT
+        - name: LLM_ENDPOINT
           value: "http://vllm.ai-system.svc:8000"
-        - name: VLLM_MODEL
+        - name: LLM_MODEL
           value: "deepseek-coder-33b-instruct"
         securityContext:
           allowPrivilegeEscalation: false

@@ -4,6 +4,8 @@ package main
 import (
 	"flag"
 	"os"
+	"strconv"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -59,15 +61,43 @@ func main() {
 	if workspaceImage == "" {
 		workspaceImage = "workspace:latest"
 	}
-	vllmNamespace := os.Getenv("VLLM_NAMESPACE")
-	if vllmNamespace == "" {
-		vllmNamespace = "ai-system"
+	llmNamespacesRaw := os.Getenv("LLM_NAMESPACES")
+	var llmNamespaces []string
+	if llmNamespacesRaw != "" {
+		for _, ns := range strings.Split(llmNamespacesRaw, ",") {
+			if ns = strings.TrimSpace(ns); ns != "" {
+				llmNamespaces = append(llmNamespaces, ns)
+			}
+		}
 	}
+
+	// EGRESS_PORTS is an optional comma-separated list of TCP port numbers that
+	// workspace pods are allowed to connect to on external IPs (0.0.0.0/0).
+	// Example: "22,80,443,8000,11434"
+	// When unset the built-in default list (security.DefaultEgressPorts) is used.
+	egressPortsRaw := os.Getenv("EGRESS_PORTS")
+	var egressPorts []int32
+	if egressPortsRaw != "" {
+		for _, raw := range strings.Split(egressPortsRaw, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			p, parseErr := strconv.ParseInt(raw, 10, 32)
+			if parseErr != nil || p < 1 || p > 65535 {
+				setupLog.Info("Ignoring invalid EGRESS_PORTS entry", "value", raw)
+				continue
+			}
+			egressPorts = append(egressPorts, int32(p))
+		}
+	}
+
 	if err = (&controllers.WorkspaceReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
 		WorkspaceImage: workspaceImage,
-		VLLMNamespace:  vllmNamespace,
+		LLMNamespaces:  llmNamespaces,
+		EgressPorts:    egressPorts,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller", "controller", "Workspace")
 		os.Exit(1)

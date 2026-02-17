@@ -33,8 +33,10 @@ spec:
         env:
         - name: WORKSPACE_IMAGE
           value: "{{ .Values.workspace.image.repository }}:{{ .Values.workspace.image.tag }}"
-        - name: VLLM_NAMESPACE
-          value: {{ .Values.workspace.ai.vllmNamespace | quote }}
+        - name: LLM_NAMESPACES
+          value: {{ .Values.workspace.ai.egressNamespaces | quote }}
+        - name: EGRESS_PORTS
+          value: {{ .Values.workspace.ai.egressPorts | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

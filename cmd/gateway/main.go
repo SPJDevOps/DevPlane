@@ -42,8 +42,8 @@ func main() {
 	clientID := mustEnv("OIDC_CLIENT_ID")
 	namespace := envOr("NAMESPACE", "default")
 	port := envOr("PORT", "8080")
-	vllmEndpoint := envOr("VLLM_ENDPOINT", "http://vllm.ai-system.svc:8000")
-	vllmModel := envOr("VLLM_MODEL", "deepseek-coder-33b-instruct")
+	llmEndpoint := envOr("LLM_ENDPOINT", "http://vllm.ai-system.svc:8000")
+	llmModel := envOr("LLM_MODEL", "deepseek-coder-33b-instruct")
 
 	ctx := ctrl.SetupSignalHandler()
 
@@ -66,8 +66,8 @@ func main() {
 	}
 
 	lifecycle := gw.NewLifecycleManager(k8sClient, log, gw.LifecycleConfig{
-		VLLMEndpoint:   vllmEndpoint,
-		VLLMModel:      vllmModel,
+		LLMEndpoint:    llmEndpoint,
+		LLMModel:       llmModel,
 		DefaultCPU:     "2",
 		DefaultMemory:  "4Gi",
 		DefaultStorage: "20Gi",

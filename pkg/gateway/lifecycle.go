@@ -21,8 +21,8 @@ const (
 
 // LifecycleConfig holds defaults used when creating new Workspace CRs.
 type LifecycleConfig struct {
-	VLLMEndpoint   string
-	VLLMModel      string
+	LLMEndpoint    string
+	LLMModel       string
 	DefaultCPU     string
 	DefaultMemory  string
 	DefaultStorage string
@@ -69,8 +69,8 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 					Storage: m.cfg.DefaultStorage,
 				},
 				AIConfig: workspacev1alpha1.AIConfiguration{
-					VLLMEndpoint: m.cfg.VLLMEndpoint,
-					VLLMModel:    m.cfg.VLLMModel,
+					Endpoint: m.cfg.LLMEndpoint,
+					Model:    m.cfg.LLMModel,
 				},
 			},
 		}

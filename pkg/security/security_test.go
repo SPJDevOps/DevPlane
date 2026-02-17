@@ -30,8 +30,8 @@ func minimalWorkspace() *workspacev1alpha1.Workspace {
 				CPU: "1", Memory: "2Gi", Storage: "20Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				VLLMEndpoint: "http://vllm:8000",
-				VLLMModel:    "model",
+				Endpoint: "http://vllm:8000",
+				Model:    "model",
 			},
 		},
 	}
@@ -88,7 +88,7 @@ func TestBuildDenyAllNetworkPolicy(t *testing.T) {
 
 func TestBuildEgressNetworkPolicy(t *testing.T) {
 	ws := minimalWorkspace()
-	np, err := BuildEgressNetworkPolicy(ws, "ai-system", scheme)
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system"}, []int32{80, 443}, scheme)
 	if err != nil {
 		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBuildEgressNetworkPolicy(t *testing.T) {
 	}
 
 	if len(np.Spec.Egress) != 3 {
-		t.Fatalf("Egress rules = %d, want 3 (DNS, vLLM, internet)", len(np.Spec.Egress))
+		t.Fatalf("Egress rules = %d, want 3 (DNS, LLM, internet)", len(np.Spec.Egress))
 	}
 
 	t.Run("DNS rule", func(t *testing.T) {
@@ -131,18 +131,18 @@ func TestBuildEgressNetworkPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("vLLM rule", func(t *testing.T) {
+	t.Run("LLM service rule", func(t *testing.T) {
 		rule := np.Spec.Egress[1]
 		if len(rule.To) == 0 {
-			t.Fatal("vLLM rule has no To peer")
+			t.Fatal("LLM service rule has no To peer")
 		}
 		ns := rule.To[0].NamespaceSelector
 		if ns == nil || ns.MatchLabels["kubernetes.io/metadata.name"] != "ai-system" {
-			t.Errorf("vLLM peer namespace = %v, want ai-system", ns)
+			t.Errorf("LLM service peer namespace = %v, want ai-system", ns)
 		}
-		// No port restriction on vLLM egress.
+		// No port restriction on LLM egress.
 		if len(rule.Ports) != 0 {
-			t.Errorf("vLLM rule should have no port restriction, got %v", rule.Ports)
+			t.Errorf("LLM service rule should have no port restriction, got %v", rule.Ports)
 		}
 	})
 
@@ -170,6 +170,113 @@ func TestBuildEgressNetworkPolicy(t *testing.T) {
 			t.Errorf("internet rule must allow ports 80 and 443 (has80=%v has443=%v)", has80, has443)
 		}
 	})
+}
+
+func TestBuildEgressNetworkPolicy_MultipleNamespaces(t *testing.T) {
+	ws := minimalWorkspace()
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system", "ollama-ns"}, []int32{80, 443}, scheme)
+	if err != nil {
+		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
+	}
+
+	// LLM rule should have 2 peers
+	rule := np.Spec.Egress[1]
+	if len(rule.To) != 2 {
+		t.Fatalf("LLM rule peers = %d, want 2", len(rule.To))
+	}
+	ns0 := rule.To[0].NamespaceSelector
+	if ns0 == nil || ns0.MatchLabels["kubernetes.io/metadata.name"] != "ai-system" {
+		t.Errorf("peer[0] namespace = %v, want ai-system", ns0)
+	}
+	ns1 := rule.To[1].NamespaceSelector
+	if ns1 == nil || ns1.MatchLabels["kubernetes.io/metadata.name"] != "ollama-ns" {
+		t.Errorf("peer[1] namespace = %v, want ollama-ns", ns1)
+	}
+}
+
+func TestBuildEgressNetworkPolicy_DefaultPorts(t *testing.T) {
+	ws := minimalWorkspace()
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system"}, DefaultEgressPorts, scheme)
+	if err != nil {
+		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
+	}
+
+	internetRule := np.Spec.Egress[2]
+	portSet := make(map[int32]bool, len(internetRule.Ports))
+	for _, p := range internetRule.Ports {
+		portSet[p.Port.IntVal] = true
+	}
+
+	// All default ports must appear in the internet rule.
+	for _, want := range DefaultEgressPorts {
+		if !portSet[want] {
+			t.Errorf("default port %d missing from internet rule", want)
+		}
+	}
+
+	// All ports must be TCP.
+	for _, p := range internetRule.Ports {
+		if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			t.Errorf("port %d protocol = %v, want TCP", p.Port.IntVal, p.Protocol)
+		}
+	}
+}
+
+func TestBuildEgressNetworkPolicy_CustomPorts(t *testing.T) {
+	ws := minimalWorkspace()
+	// Custom port list: SSH, HTTPS, vLLM, Ollama, and a bare-metal registry.
+	customPorts := []int32{22, 443, 8000, 9443, 11434}
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system"}, customPorts, scheme)
+	if err != nil {
+		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
+	}
+
+	internetRule := np.Spec.Egress[2]
+	portSet := make(map[int32]bool, len(internetRule.Ports))
+	for _, p := range internetRule.Ports {
+		portSet[p.Port.IntVal] = true
+	}
+
+	for _, want := range customPorts {
+		if !portSet[want] {
+			t.Errorf("custom port %d missing from internet rule", want)
+		}
+	}
+
+	// Port 80 should NOT be present (not in customPorts).
+	if portSet[80] {
+		t.Errorf("port 80 should not be in internet rule when not requested")
+	}
+
+	// Verify all ports are TCP.
+	for _, p := range internetRule.Ports {
+		if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			t.Errorf("port %d protocol = %v, want TCP", p.Port.IntVal, p.Protocol)
+		}
+	}
+}
+
+func TestBuildEgressNetworkPolicy_InvalidPortsSkipped(t *testing.T) {
+	ws := minimalWorkspace()
+	// Include invalid port values — they should be silently dropped.
+	ports := []int32{0, 443, -1, 65536, 22}
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system"}, ports, scheme)
+	if err != nil {
+		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
+	}
+
+	internetRule := np.Spec.Egress[2]
+	// Only the valid ports (443, 22) should appear.
+	if len(internetRule.Ports) != 2 {
+		t.Errorf("internet rule ports = %d, want 2 (only valid ports 22 and 443)", len(internetRule.Ports))
+	}
+	portSet := make(map[int32]bool)
+	for _, p := range internetRule.Ports {
+		portSet[p.Port.IntVal] = true
+	}
+	if !portSet[443] || !portSet[22] {
+		t.Errorf("expected ports 22 and 443, got %v", portSet)
+	}
 }
 
 func TestBuildIngressFromGatewayNetworkPolicy(t *testing.T) {

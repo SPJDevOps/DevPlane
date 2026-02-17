@@ -43,10 +43,14 @@ spec:
               key: client-id
         - name: NAMESPACE
           value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
-        - name: VLLM_ENDPOINT
-          value: {{ .Values.workspace.ai.vllmEndpoint | quote }}
-        - name: VLLM_MODEL
-          value: {{ .Values.workspace.ai.vllmModel | quote }}
+        - name: LLM_ENDPOINT
+          value: {{ .Values.workspace.ai.endpoint | quote }}
+        - name: LLM_MODEL
+          value: {{ .Values.workspace.ai.model | quote }}
+        {{- if .Values.gateway.tls.customCABundle.configMapName }}
+        - name: SSL_CERT_FILE
+          value: /etc/ssl/certs/custom/ca-certificates.crt
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -66,4 +70,16 @@ spec:
           periodSeconds: 5
         resources:
           {{- toYaml .Values.gateway.resources | nindent 10 }}
+        {{- if .Values.gateway.tls.customCABundle.configMapName }}
+        volumeMounts:
+        - name: custom-ca-certs
+          mountPath: /etc/ssl/certs/custom
+          readOnly: true
+        {{- end }}
+      {{- if .Values.gateway.tls.customCABundle.configMapName }}
+      volumes:
+      - name: custom-ca-certs
+        configMap:
+          name: {{ .Values.gateway.tls.customCABundle.configMapName }}
+      {{- end }}
 {{- end }}

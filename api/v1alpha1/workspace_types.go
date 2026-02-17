@@ -11,10 +11,13 @@ type WorkspaceSpec struct {
 	User UserInfo `json:"user"`
 	// Resources defines CPU, memory, and storage for the workspace pod.
 	Resources ResourceRequirements `json:"resources"`
-	// AIConfig configures the AI coding assistant (vLLM endpoint, model).
+	// AIConfig configures the AI coding assistant (OpenAI-compatible LLM endpoint).
 	AIConfig AIConfiguration `json:"aiConfig"`
 	// Persistence configures storage class for the workspace PVC.
 	Persistence PersistenceConfig `json:"persistence"`
+	// TLS configures custom TLS certificate trust for the workspace.
+	// +optional
+	TLS TLSConfig `json:"tls,omitempty"`
 }
 
 // UserInfo holds the sanitized user identity from OIDC.
@@ -36,13 +39,37 @@ type ResourceRequirements struct {
 }
 
 // AIConfiguration configures the AI assistant backend.
+// The endpoint must be OpenAI API-compatible (vLLM, Ollama, OpenWebUI, etc.).
 type AIConfiguration struct {
-	// DefaultProvider is the default AI provider name.
-	DefaultProvider string `json:"defaultProvider,omitempty"`
-	// VLLMEndpoint is the vLLM service URL (e.g., "http://vllm.ai-system.svc:8000").
-	VLLMEndpoint string `json:"vllmEndpoint"`
-	// VLLMModel is the model name (e.g., "deepseek-coder-33b-instruct").
-	VLLMModel string `json:"vllmModel"`
+	// Endpoint is the base URL of the OpenAI-compatible LLM service
+	// (e.g., "http://vllm.ai-system.svc:8000", "http://ollama.ai-system.svc:11434").
+	Endpoint string `json:"endpoint"`
+	// Model is the model identifier (e.g., "deepseek-coder-33b-instruct").
+	Model string `json:"model"`
+	// EgressNamespaces lists Kubernetes namespaces where LLM services run.
+	// NetworkPolicy egress rules allow traffic to all pods in these namespaces.
+	// +optional
+	EgressNamespaces []string `json:"egressNamespaces,omitempty"`
+	// EgressPorts lists TCP ports allowed for egress to external IPs (0.0.0.0/0).
+	// Use this to allow git over SSH (22), package registries (5000, 8080, 8081),
+	// bare-metal LLM endpoints (8000, 11434), and any other non-standard ports.
+	// If empty, the operator default or built-in default list is used.
+	// +optional
+	EgressPorts []int32 `json:"egressPorts,omitempty"`
+}
+
+// TLSConfig configures custom TLS certificate trust for the workspace.
+type TLSConfig struct {
+	// CustomCABundle references a ConfigMap containing CA certificates.
+	// All keys will be mounted into the pod's trust store.
+	// +optional
+	CustomCABundle *CABundleRef `json:"customCABundle,omitempty"`
+}
+
+// CABundleRef references a ConfigMap containing CA certificates.
+type CABundleRef struct {
+	// Name of the ConfigMap containing CA certificates.
+	Name string `json:"name"`
 }
 
 // PersistenceConfig configures persistent storage for the workspace.

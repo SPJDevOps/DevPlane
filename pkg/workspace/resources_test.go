@@ -66,8 +66,8 @@ func minimalWorkspace() *workspacev1alpha1.Workspace {
 				CPU: "1", Memory: "2Gi", Storage: "20Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				VLLMEndpoint: "http://vllm:8000",
-				VLLMModel:    "model",
+				Endpoint: "http://vllm:8000",
+				Model:    "model",
 			},
 			Persistence: workspacev1alpha1.PersistenceConfig{StorageClass: "standard"},
 		},
@@ -165,7 +165,7 @@ func TestBuildPod(t *testing.T) {
 	for _, e := range c.Env {
 		envMap[e.Name] = e.Value
 	}
-	for _, name := range []string{"VLLM_ENDPOINT", "VLLM_MODEL", "USER_EMAIL", "USER_ID"} {
+	for _, name := range []string{"OPENAI_BASE_URL", "MODEL_NAME", "USER_EMAIL", "USER_ID"} {
 		if _, ok := envMap[name]; !ok {
 			t.Errorf("missing env %q", name)
 		}
@@ -178,6 +178,82 @@ func TestBuildPod(t *testing.T) {
 	}
 	if pod.Spec.ServiceAccountName != "john-workspace" {
 		t.Errorf("pod.Spec.ServiceAccountName = %q, want john-workspace", pod.Spec.ServiceAccountName)
+	}
+}
+
+func TestBuildPod_WithCABundle(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.TLS.CustomCABundle = &workspacev1alpha1.CABundleRef{Name: "my-ca-bundle"}
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	if err != nil {
+		t.Fatalf("BuildPod: %v", err)
+	}
+
+	// Check volume exists
+	foundVolume := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "custom-ca-certs" {
+			foundVolume = true
+			if v.ConfigMap == nil || v.ConfigMap.Name != "my-ca-bundle" {
+				t.Errorf("custom-ca-certs volume ConfigMap = %v, want my-ca-bundle", v.ConfigMap)
+			}
+		}
+	}
+	if !foundVolume {
+		t.Error("expected custom-ca-certs volume")
+	}
+
+	// Check volume mount exists
+	c := &pod.Spec.Containers[0]
+	foundMount := false
+	for _, vm := range c.VolumeMounts {
+		if vm.Name == "custom-ca-certs" {
+			foundMount = true
+			if vm.MountPath != "/etc/ssl/certs/custom" {
+				t.Errorf("mountPath = %q, want /etc/ssl/certs/custom", vm.MountPath)
+			}
+			if !vm.ReadOnly {
+				t.Error("custom-ca-certs mount should be read-only")
+			}
+		}
+	}
+	if !foundMount {
+		t.Error("expected custom-ca-certs volume mount")
+	}
+
+	// Check CUSTOM_CA_MOUNTED env var
+	envMap := make(map[string]string)
+	for _, e := range c.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["CUSTOM_CA_MOUNTED"] != "true" {
+		t.Errorf("CUSTOM_CA_MOUNTED = %q, want true", envMap["CUSTOM_CA_MOUNTED"])
+	}
+}
+
+func TestBuildPod_WithoutCABundle(t *testing.T) {
+	ws := minimalWorkspace()
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	if err != nil {
+		t.Fatalf("BuildPod: %v", err)
+	}
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "custom-ca-certs" {
+			t.Error("custom-ca-certs volume should not exist without TLS config")
+		}
+	}
+
+	c := &pod.Spec.Containers[0]
+	for _, vm := range c.VolumeMounts {
+		if vm.Name == "custom-ca-certs" {
+			t.Error("custom-ca-certs mount should not exist without TLS config")
+		}
+	}
+	for _, e := range c.Env {
+		if e.Name == "CUSTOM_CA_MOUNTED" {
+			t.Error("CUSTOM_CA_MOUNTED env should not exist without TLS config")
+		}
 	}
 }
 
@@ -242,11 +318,19 @@ func TestValidateSpec_MissingStorage(t *testing.T) {
 	}
 }
 
-func TestValidateSpec_MissingVLLMEndpoint(t *testing.T) {
+func TestValidateSpec_MissingEndpoint(t *testing.T) {
 	ws := minimalWorkspace()
-	ws.Spec.AIConfig.VLLMEndpoint = ""
+	ws.Spec.AIConfig.Endpoint = ""
 	if err := ValidateSpec(ws); err == nil {
-		t.Error("ValidateSpec: expected error for missing aiConfig.vllmEndpoint")
+		t.Error("ValidateSpec: expected error for missing aiConfig.endpoint")
+	}
+}
+
+func TestValidateSpec_MissingModel(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.AIConfig.Model = ""
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for missing aiConfig.model")
 	}
 }
 

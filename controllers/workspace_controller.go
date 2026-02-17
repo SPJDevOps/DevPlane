@@ -25,7 +25,12 @@ type WorkspaceReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	WorkspaceImage string
-	VLLMNamespace  string
+	LLMNamespaces  []string
+	// EgressPorts is the operator-level default list of TCP ports allowed for
+	// egress to external IPs (0.0.0.0/0).  Individual Workspace CRs may override
+	// this via spec.aiConfig.egressPorts.  When empty, security.DefaultEgressPorts
+	// is used.
+	EgressPorts []int32
 }
 
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
@@ -142,28 +147,52 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log.Info("Created deny-all NetworkPolicy", "networkPolicy", denyAllName)
 	}
 
-	// Ensure egress NetworkPolicy
+	// Ensure egress NetworkPolicy — use CreateOrUpdate so that changes to
+	// egressPorts or egressNamespaces (from spec or operator env) are applied to
+	// existing workspaces on the next reconcile without requiring deletion.
 	egressName := fmt.Sprintf("%s-workspace-egress", userID)
+
+	llmNamespaces := ws.Spec.AIConfig.EgressNamespaces
+	if len(llmNamespaces) == 0 {
+		llmNamespaces = r.LLMNamespaces
+	}
+	if len(llmNamespaces) == 0 {
+		llmNamespaces = []string{"ai-system"}
+	}
+
+	egressPorts := ws.Spec.AIConfig.EgressPorts
+	if len(egressPorts) == 0 {
+		egressPorts = r.EgressPorts
+	}
+	if len(egressPorts) == 0 {
+		egressPorts = security.DefaultEgressPorts
+	}
+
+	desiredEgress, buildErr := security.BuildEgressNetworkPolicy(&ws, llmNamespaces, egressPorts, r.Scheme)
+	if buildErr != nil {
+		log.Error(buildErr, "Failed to build egress NetworkPolicy")
+		return ctrl.Result{}, buildErr
+	}
+
 	var npEgress networkingv1.NetworkPolicy
 	if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: egressName}, &npEgress); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get egress NetworkPolicy")
 			return ctrl.Result{}, err
 		}
-		vllmNS := r.VLLMNamespace
-		if vllmNS == "" {
-			vllmNS = "ai-system"
-		}
-		npObj, buildErr := security.BuildEgressNetworkPolicy(&ws, vllmNS, r.Scheme)
-		if buildErr != nil {
-			log.Error(buildErr, "Failed to build egress NetworkPolicy")
-			return ctrl.Result{}, buildErr
-		}
-		if err := r.Create(ctx, npObj); err != nil {
+		if err := r.Create(ctx, desiredEgress); err != nil {
 			log.Error(err, "Failed to create egress NetworkPolicy")
 			return ctrl.Result{}, err
 		}
 		log.Info("Created egress NetworkPolicy", "networkPolicy", egressName)
+	} else {
+		// Update egress rules in place so port / namespace changes take effect.
+		npEgress.Spec.Egress = desiredEgress.Spec.Egress
+		if err := r.Update(ctx, &npEgress); err != nil {
+			log.Error(err, "Failed to update egress NetworkPolicy")
+			return ctrl.Result{}, err
+		}
+		log.Info("Reconciled egress NetworkPolicy", "networkPolicy", egressName)
 	}
 
 	// Ensure ingress-gateway NetworkPolicy
