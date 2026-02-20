@@ -70,8 +70,9 @@ helm install workspace-operator deploy/helm/workspace-operator \
   --set workspace.image.tag=v1.0.0 \
   --set gateway.oidc.issuerURL=https://idp.example.com \
   --set gateway.oidc.clientID=devplane \
-  --set workspace.ai.vllmEndpoint=http://vllm.ai-system.svc:8000 \
-  --set workspace.ai.vllmModel=deepseek-coder-33b-instruct
+  --set 'workspace.ai.providers[0].name=local' \
+  --set 'workspace.ai.providers[0].endpoint=http://vllm.ai-system.svc:8000' \
+  --set 'workspace.ai.providers[0].models[0]=deepseek-coder-33b-instruct'
 ```
 
 Using a values file (recommended for production):
@@ -114,9 +115,13 @@ workspace:
     storage: "20Gi"
   storageClass: "fast-ssd"
   ai:
-    vllmEndpoint: "http://vllm.ai-system.svc:8000"
-    vllmModel: "deepseek-coder-33b-instruct"
-    vllmNamespace: "ai-system"
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
+    egressNamespaces:
+      - ai-system
 ```
 
 ```bash
@@ -210,9 +215,7 @@ kubectl get pods,pvc -n workspaces
 | `workspace.defaultResources.memory` | string | `4Gi` | Default memory request for workspace pods |
 | `workspace.defaultResources.storage` | string | `20Gi` | Default PVC size for workspace pods |
 | `workspace.storageClass` | string | `""` | StorageClass for workspace PVCs (cluster default if empty) |
-| `workspace.ai.vllmEndpoint` | string | `http://vllm.ai-system.svc:8000` | OpenAI-compatible LLM endpoint URL injected into workspace pods as `OPENAI_BASE_URL`. Despite the key name, any compatible API works — vLLM, Ollama, LM Studio, or a hosted service. |
-| `workspace.ai.vllmModel` | string | `deepseek-coder-33b-instruct` | Model name injected into workspace pods as `MODEL_NAME`. Set this to the model identifier your chosen endpoint expects. |
-| `workspace.ai.vllmNamespace` | string | `ai-system` | In-cluster namespace of the LLM service (used in NetworkPolicy egress rules). Leave empty if using an external endpoint. |
+| `workspace.ai.providers` | list | see below | List of AI provider backends. Each entry requires `name` (opencode provider key), `endpoint` (OpenAI-compatible base URL), and `models` (list of model IDs). At least one provider must be specified. Example: `[{name: local, endpoint: "http://vllm.ai-system.svc:8000", models: [deepseek-coder-33b-instruct]}]` |
 | `workspace.ai.egressNamespaces` | string | `ai-system` | Comma-separated in-cluster namespaces whose pods workspace pods may reach on any port (LLM services) |
 | `workspace.ai.egressPorts` | string | `22,80,443,5000,8000,8080,8081,11434` | Comma-separated TCP ports allowed for egress to external IPs. Covers SSH (22), HTTP/HTTPS (80/443), Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081), Ollama (11434). Override to suit your environment. |
 
@@ -394,7 +397,7 @@ kubectl logs -n workspaces <userid>-workspace-pod --previous
 
 Common causes:
 - ttyd or opencode binary missing from image (re-build `Dockerfile.workspace`).
-- LLM endpoint unreachable — check that `OPENAI_BASE_URL` is set and reachable from the pod (workspaces still start without a reachable endpoint; only opencode is affected).
+- LLM endpoint unreachable — check that `AI_PROVIDERS_JSON` is set correctly and that the endpoints are reachable from the pod (workspaces still start without a reachable endpoint; only opencode is affected).
 - Filesystem permission error — workspace image must run as UID 1000 with writable mounted volumes.
 
 ### OIDC 401 errors

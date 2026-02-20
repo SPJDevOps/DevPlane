@@ -84,6 +84,6 @@ NetworkPolicies: deny-all default, allow egress only to vLLM namespace. RBAC: le
 
 ## Environment Variables (Workspace Pod)
 
-`OPENAI_BASE_URL`, `MODEL_NAME`, `USER_EMAIL`, `USER_ID` — injected by operator into workspace pods. `CUSTOM_CA_MOUNTED` is set to `"true"` when a custom CA bundle ConfigMap is configured via `spec.tls.customCABundle`.
+`AI_PROVIDERS_JSON`, `USER_EMAIL`, `USER_ID` — injected by operator into workspace pods. `AI_PROVIDERS_JSON` is a JSON-encoded array of `{name, endpoint, models}` objects derived from `spec.aiConfig.providers`; the entrypoint uses it to generate the opencode configuration. `CUSTOM_CA_MOUNTED` is set to `"true"` when a custom CA bundle ConfigMap is configured via `spec.tls.customCABundle`.
 
 ## Target: Kubernetes 1.27+ (stable APIs only)

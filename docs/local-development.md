@@ -43,12 +43,20 @@ docker run --rm \
   -v devplane-workspace-data:/workspace \
   -e USER_ID=localdev \
   -e USER_EMAIL=dev@localhost \
-  -e OPENAI_BASE_URL=http://host.docker.internal:11434 \
-  -e MODEL_NAME=llama3 \
+  -e AI_PROVIDERS_JSON='[{"name":"local","endpoint":"http://host.docker.internal:11434","models":["llama3"]}]' \
   devplane-workspace:local
 ```
 
-`OPENAI_BASE_URL` and `MODEL_NAME` can point to any reachable OpenAI-compatible API (Ollama, LM Studio, vLLM, a hosted service). If you don't have a local LLM running, set them to placeholder values — the shell and all other dev tools still work; opencode will simply report a connection error.
+`AI_PROVIDERS_JSON` is a JSON array of provider objects, each with a `name` (used as the opencode provider key), an `endpoint` (OpenAI-compatible base URL), and a `models` list. It accepts any reachable OpenAI-compatible API — Ollama, LM Studio, vLLM, a hosted service. You can supply multiple providers, e.g.:
+
+```bash
+-e AI_PROVIDERS_JSON='[
+  {"name":"local","endpoint":"http://host.docker.internal:11434","models":["llama3"]},
+  {"name":"cloud","endpoint":"https://api.openai.com","models":["gpt-4o"]}
+]'
+```
+
+If you don't have a local LLM running, pass a placeholder value — the shell and all other dev tools still work; opencode will simply report a connection error.
 
 ### 1.3 Open the browser terminal
 
@@ -80,6 +88,7 @@ After editing `Dockerfile.workspace` or `hack/entrypoint.sh`:
 docker build -f Dockerfile.workspace --build-arg TARGETARCH=amd64 -t devplane-workspace:local .
 docker run --rm -p 7681:7681 -v devplane-workspace-data:/workspace \
   -e USER_ID=localdev -e USER_EMAIL=dev@localhost \
+  -e AI_PROVIDERS_JSON='[{"name":"local","endpoint":"http://host.docker.internal:11434","models":["llama3"]}]' \
   devplane-workspace:local
 ```
 
@@ -160,11 +169,12 @@ helm install workspace-operator deploy/helm/workspace-operator \
   --set workspace.image.pullPolicy=Never \
   --set gateway.oidc.issuerURL=http://172.21.0.2:32000 \
   --set gateway.oidc.clientID=devplane \
-  --set workspace.ai.vllmEndpoint=http://host.docker.internal:11434 \
-  --set workspace.ai.vllmModel=llama3
+  --set 'workspace.ai.providers[0].name=local' \
+  --set 'workspace.ai.providers[0].endpoint=http://host.docker.internal:11434' \
+  --set 'workspace.ai.providers[0].models[0]=llama3'
 ```
 
-`workspace.ai.vllmEndpoint` accepts any OpenAI-compatible URL. Point it at a local Ollama instance, a remote API, or a placeholder — the operator and workspace pod will start regardless.
+`workspace.ai.providers` is a list — each entry needs a `name`, an `endpoint` (any OpenAI-compatible URL), and at least one model in `models`. For multiple providers use additional `[1]`, `[2]` indexes. If you don't have a local LLM, pass placeholder values — the operator and workspace pod will start regardless; opencode will report a connection error inside the terminal.
 
 ### 2.5 Verify the operator
 
@@ -190,6 +200,12 @@ metadata:
 spec:
   userID: "localdev"
   userEmail: "dev@localhost"
+  aiConfig:
+    providers:
+      - name: local
+        endpoint: "http://host.docker.internal:11434"
+        models:
+          - llama3
 EOF
 
 # Watch it progress: Pending → Creating → Running
@@ -220,5 +236,5 @@ docker volume rm devplane-workspace-data
 
 - **Image not found in KIND**: Confirm you ran `kind load docker-image` after every `docker build`. KIND does not pull from the local Docker daemon automatically.
 - **172.21.0.2 is wrong**: The Docker bridge IP may differ on your machine. Run `docker network inspect kind | jq '.[0].IPAM.Config[0].Gateway'` to find the correct IP and update `dex-values.yaml` accordingly.
-- **Ollama on macOS**: `host.docker.internal` resolves to the macOS host from inside KIND nodes. Start Ollama on the host and set `vllmEndpoint=http://host.docker.internal:11434`.
+- **Ollama on macOS**: `host.docker.internal` resolves to the macOS host from inside KIND nodes. Start Ollama on the host and set `workspace.ai.providers[0].endpoint=http://host.docker.internal:11434`.
 - **Workspace stuck in `Creating`**: Check `kubectl describe pod localdev-workspace-pod -n workspaces` for image pull or scheduling errors.

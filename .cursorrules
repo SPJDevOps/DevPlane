@@ -229,8 +229,7 @@ When asked to generate code, always:
 - Avoid deprecated APIs
 
 ## Environment Variables (Workspace Pod)
-- VLLM_ENDPOINT: vLLM service URL (injected by operator)
-- VLLM_MODEL: Model name (injected by operator)
+- AI_PROVIDERS_JSON: JSON array of `{name, endpoint, models}` objects (injected by operator from spec.aiConfig.providers)
 - USER_EMAIL: User's email from OIDC (injected by operator)
 - USER_ID: Sanitized username (injected by operator)
 
@@ -260,8 +259,11 @@ workspace:
     storage: "20Gi"
   storageClass: "standard"
   ai:
-    vllmEndpoint: "http://vllm.ai-system.svc:8000"
-    vllmModel: "deepseek-coder-33b-instruct"
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
 
 networkPolicy:
   enabled: true
