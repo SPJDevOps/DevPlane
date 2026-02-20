@@ -1,7 +1,13 @@
 package gateway
 
 import (
+	"container/list"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSanitizeUserID(t *testing.T) {
@@ -28,6 +34,96 @@ func TestSanitizeUserID(t *testing.T) {
 				t.Errorf("sanitizeUserID(%q) = %q, want %q", tt.sub, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestNewValidator creates a minimal fake OIDC discovery server so that
+// NewValidator can complete its provider-discovery HTTP round-trip without
+// a real IdP.
+func TestNewValidator(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		issuer := "http://" + r.Host
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/auth",
+				"token_endpoint":         issuer + "/token",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // stop the evictExpired goroutine
+
+	v, err := NewValidator(ctx, srv.URL, "test-client")
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	if v == nil {
+		t.Fatal("NewValidator returned nil")
+	}
+}
+
+// TestValidate_CacheHit seeds the in-memory LRU cache directly then calls
+// Validate to exercise the fast path that returns cached claims without
+// contacting the OIDC verifier.
+func TestValidate_CacheHit(t *testing.T) {
+	v := &Validator{
+		index: make(map[string]*list.Element),
+		lru:   list.New(),
+	}
+
+	rawToken := "cached-bearer-token"
+	key := hashToken(rawToken)
+	want := &Claims{Sub: "user1", Email: "user1@example.com", UserID: "user1"}
+
+	entry := &cachedEntry{
+		key:    key,
+		claims: want,
+		expiry: time.Now().Add(tokenCacheTTL),
+	}
+	elem := v.lru.PushFront(entry)
+	v.index[key] = elem
+
+	got, err := v.Validate(context.Background(), rawToken)
+	if err != nil {
+		t.Fatalf("Validate (cache hit): %v", err)
+	}
+	if got.Sub != want.Sub || got.Email != want.Email || got.UserID != want.UserID {
+		t.Errorf("claims = %+v, want %+v", got, want)
+	}
+}
+
+// TestEvictExpired_StopsOnContextCancel verifies that the background eviction
+// goroutine exits cleanly when its context is cancelled.
+func TestEvictExpired_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	v := &Validator{
+		index: make(map[string]*list.Element),
+		lru:   list.New(),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		v.evictExpired(ctx)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+		// evictExpired returned after context cancellation — correct.
+	case <-time.After(2 * time.Second):
+		t.Fatal("evictExpired did not stop after context was cancelled")
 	}
 }
 

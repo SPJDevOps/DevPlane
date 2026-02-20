@@ -47,6 +47,35 @@ func (p *stubProxy) ServeWS(w http.ResponseWriter, _ *http.Request, _ string, _ 
 // discardLog returns a no-op logger suitable for tests.
 func discardLog() logr.Logger { return logr.Discard() }
 
+// --- handleHealth tests ---
+
+func TestHandleHealth(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handleHealth(w, r)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if body := w.Body.String(); body != "ok" {
+		t.Errorf("body = %q, want ok", body)
+	}
+}
+
+// --- envOr tests ---
+
+func TestEnvOr_Present(t *testing.T) {
+	t.Setenv("TEST_ENVOR_KEY", "myvalue")
+	if got := envOr("TEST_ENVOR_KEY", "default"); got != "myvalue" {
+		t.Errorf("envOr = %q, want myvalue", got)
+	}
+}
+
+func TestEnvOr_Missing(t *testing.T) {
+	if got := envOr("TEST_ENVOR_MISSING_XYZ", "fallback"); got != "fallback" {
+		t.Errorf("envOr = %q, want fallback", got)
+	}
+}
+
 // --- extractToken tests ---
 
 func TestExtractToken_AuthHeader(t *testing.T) {
@@ -84,6 +113,14 @@ func TestExtractToken_Missing(t *testing.T) {
 
 func wsRequest(token string) *http.Request {
 	return httptest.NewRequest(http.MethodGet, "/ws?token="+token, nil)
+}
+
+func TestMustEnv_Present(t *testing.T) {
+	t.Setenv("TEST_MUSTENV_GATEWAY_KEY", "myvalue")
+	got := mustEnv("TEST_MUSTENV_GATEWAY_KEY")
+	if got != "myvalue" {
+		t.Errorf("mustEnv = %q, want myvalue", got)
+	}
 }
 
 func TestHandleWS_MissingToken(t *testing.T) {

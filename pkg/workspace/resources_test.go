@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -372,6 +373,80 @@ func TestValidateSpec_ProviderMissingModels(t *testing.T) {
 func TestValidateSpec_NilWorkspace(t *testing.T) {
 	if err := ValidateSpec(nil); err == nil {
 		t.Error("ValidateSpec(nil): expected error")
+	}
+}
+
+func TestValidateSpec_UserIDTooLong(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.User.ID = strings.Repeat("a", 64)
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for user.id > 63 chars")
+	}
+}
+
+func TestValidateSpec_InvalidDNSLabel(t *testing.T) {
+	ws := minimalWorkspace()
+	// Capital letters are not valid in a DNS label.
+	ws.Spec.User.ID = "John"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for user.id with capital letters")
+	}
+}
+
+func TestValidateSpec_InvalidDNSLabel_Hyphen(t *testing.T) {
+	ws := minimalWorkspace()
+	// Labels must not start with a hyphen.
+	ws.Spec.User.ID = "-john"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for user.id starting with hyphen")
+	}
+}
+
+func TestValidateSpec_MissingCPU(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.CPU = ""
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for missing resources.cpu")
+	}
+}
+
+func TestValidateSpec_MissingMemory(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.Memory = ""
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for missing resources.memory")
+	}
+}
+
+func TestValidateSpec_InvalidCPUQuantity(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.CPU = "not-a-quantity"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for invalid CPU quantity")
+	}
+}
+
+func TestValidateSpec_InvalidMemoryQuantity(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.Memory = "not-a-quantity"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for invalid memory quantity")
+	}
+}
+
+func TestValidateSpec_InvalidStorageQuantity(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.Storage = "not-a-quantity"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for invalid storage quantity")
+	}
+}
+
+func TestBuildPVC_InvalidStorageQuantity(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Resources.Storage = "not-a-quantity"
+	if _, err := BuildPVC(ws, scheme); err == nil {
+		t.Error("BuildPVC: expected error for invalid storage quantity")
 	}
 }
 

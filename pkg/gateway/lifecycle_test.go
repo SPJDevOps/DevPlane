@@ -170,6 +170,132 @@ func TestEnsureWorkspace_CreatesNewCR(t *testing.T) {
 	}
 }
 
+func TestWaitForRunning_StoppedThenRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "stopws", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "stopws", Email: "stop@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(ctx, ws); err != nil {
+		t.Fatalf("Create workspace: %v", err)
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseStopped
+	if err := fc.Status().Update(ctx, ws); err != nil {
+		t.Fatalf("Set Stopped status: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "stopws", Email: "stop@test.com", UserID: "stopws"}
+
+	// After waitForRunning patches the Stopped phase clear, update to Running.
+	// workspaceReadyPoll = 2s, so do this within that window.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		var updated workspacev1alpha1.Workspace
+		if err := fc.Get(ctx, types.NamespacedName{Name: "stopws", Namespace: "default"}, &updated); err != nil {
+			return
+		}
+		updated.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+		updated.Status.ServiceEndpoint = "stopws-workspace-svc.default.svc.cluster.local"
+		_ = fc.Status().Update(ctx, &updated)
+	}()
+
+	result, err := lm.EnsureWorkspace(ctx, "default", claims)
+	if err != nil {
+		t.Fatalf("EnsureWorkspace: %v", err)
+	}
+	if result.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
+		t.Errorf("phase = %q, want Running", result.Status.Phase)
+	}
+}
+
+func TestWaitForRunning_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so waitForRunning returns via ctx.Done().
+	cancel()
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	// Create a workspace with no phase — waitForRunning won't short-circuit on phase.
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "ctxws", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "ctxws", Email: "ctx@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(context.Background(), ws); err != nil {
+		t.Fatalf("Create workspace: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "ctxws", Email: "ctx@test.com", UserID: "ctxws"}
+	_, err := lm.EnsureWorkspace(ctx, "default", claims)
+	if err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
+	}
+}
+
+func TestTouchLastAccessed(t *testing.T) {
+	ctx := context.Background()
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "touch-ws", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "touch", Email: "touch@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(ctx, ws); err != nil {
+		t.Fatalf("Create workspace: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	lm.TouchLastAccessed(ctx, ws)
+
+	// Verify LastAccessed was stamped (best-effort, no error expected).
+	var updated workspacev1alpha1.Workspace
+	if err := fc.Get(ctx, types.NamespacedName{Name: "touch-ws", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("Get workspace: %v", err)
+	}
+	// LastAccessed should now be set.
+	if updated.Status.LastAccessed.IsZero() {
+		t.Error("LastAccessed should be non-zero after TouchLastAccessed")
+	}
+}
+
 func TestLifecycleManager_GetExisting(t *testing.T) {
 	ctx := context.Background()
 	fc := fake.NewClientBuilder().WithScheme(testScheme).

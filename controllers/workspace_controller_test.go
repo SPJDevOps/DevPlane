@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -15,6 +16,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -323,4 +325,404 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 	if ws.Status.Message == "" {
 		t.Error("status.message expected non-empty for invalid spec")
 	}
+}
+
+func TestSetupWithManager_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	env := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
+		ErrorIfCRDPathMissing: true,
+	}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatalf("Failed to start envtest: %v", err)
+	}
+	defer func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("Failed to stop envtest: %v", err)
+		}
+	}()
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: testScheme})
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	r := &WorkspaceReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		WorkspaceImage: "workspace:test",
+	}
+	if err := r.SetupWithManager(mgr); err != nil {
+		t.Fatalf("SetupWithManager: %v", err)
+	}
+}
+
+// ── Fake-client unit tests (no envtest / etcd required) ──────────────────────
+//
+// These tests cover controller branches that the envtest integration tests do
+// not reach (stopped phase, deletion, PVC lost, pod failure states, etc.).
+
+// wsWithFinalizer creates a minimal valid Workspace that already carries the
+// workspaceFinalizer so a reconcile call skips the "register finalizer" step.
+func wsWithFinalizer(name, userID string) *workspacev1alpha1.Workspace {
+	return &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  "default",
+			UID:        types.UID("uid-" + userID),
+			Finalizers: []string{workspaceFinalizer},
+		},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User: workspacev1alpha1.UserInfo{ID: userID, Email: userID + "@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{
+				CPU: "100m", Memory: "128Mi", Storage: "1Gi",
+			},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+}
+
+// newFakeReconciler returns a WorkspaceReconciler backed by a fake client.
+// Objects in objs are pre-seeded (including any status already set on them).
+func newFakeReconciler(t *testing.T, objs ...client.Object) (*WorkspaceReconciler, client.Client) {
+	t.Helper()
+	fc := fake.NewClientBuilder().
+		WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		WithObjects(objs...).
+		Build()
+	return &WorkspaceReconciler{
+		Client:         fc,
+		Scheme:         testScheme,
+		WorkspaceImage: "workspace:test",
+	}, fc
+}
+
+// reconcileNN is a convenience that issues one Reconcile call for the named object.
+func reconcileNN(t *testing.T, r *WorkspaceReconciler, nn types.NamespacedName) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+// getWS fetches the workspace or fatals the test.
+func getWS(t *testing.T, fc client.Client, nn types.NamespacedName) workspacev1alpha1.Workspace {
+	t.Helper()
+	var ws workspacev1alpha1.Workspace
+	if err := fc.Get(context.Background(), nn, &ws); err != nil {
+		t.Fatalf("Get Workspace: %v", err)
+	}
+	return ws
+}
+
+func TestReconcile_StoppedPhase(t *testing.T) {
+	ws := wsWithFinalizer("stopped-ws", "alice")
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseStopped
+	r, fc := newFakeReconciler(t, ws)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	// No PVC should have been created (reconcile returns early for Stopped).
+	var pvcList corev1.PersistentVolumeClaimList
+	if err := fc.List(context.Background(), &pvcList, client.InNamespace("default")); err != nil {
+		t.Fatal(err)
+	}
+	if len(pvcList.Items) != 0 {
+		t.Errorf("expected no PVCs for stopped workspace, got %d", len(pvcList.Items))
+	}
+}
+
+func TestReconcile_Delete(t *testing.T) {
+	ctx := context.Background()
+	ws := wsWithFinalizer("del-ws", "bob")
+	r, fc := newFakeReconciler(t, ws)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+
+	// Delete workspace — fake client sets DeletionTimestamp because finalizers are present.
+	var stored workspacev1alpha1.Workspace
+	if err := fc.Get(ctx, nn, &stored); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := fc.Delete(ctx, &stored); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Reconcile should call reconcileDelete, removing the finalizer.
+	reconcileNN(t, r, nn)
+
+	// After removing the last finalizer the fake client deletes the object.
+	var ws2 workspacev1alpha1.Workspace
+	if err := fc.Get(ctx, nn, &ws2); err == nil {
+		// If found (unlikely), at least the finalizer must be gone.
+		if len(ws2.Finalizers) != 0 {
+			t.Errorf("expected no finalizers after delete, got %v", ws2.Finalizers)
+		}
+	}
+}
+
+func TestReconcile_PVCLost(t *testing.T) {
+	ws := wsWithFinalizer("pvc-lost-ws", "charlie")
+
+	// Pre-create a PVC with Lost status (not a status subresource → status stored directly).
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "charlie-workspace-pvc",
+			Namespace: "default",
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimLost,
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
+		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_PodFailed(t *testing.T) {
+	ws := wsWithFinalizer("pod-failed-ws", "dave")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OOMKilled"},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
+		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_CrashLoopBackOff(t *testing.T) {
+	ws := wsWithFinalizer("crash-ws", "eve")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "eve-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "eve-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "workspace",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "back-off restarting failed container",
+						},
+					},
+				},
+			},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
+		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_ImagePullBackOff(t *testing.T) {
+	ws := wsWithFinalizer("imgpull-ws", "frank")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "frank-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "frank-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "workspace",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"},
+					},
+				},
+			},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
+		t.Errorf("status.phase = %q, want Failed (ImagePullBackOff)", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_PodCreatingPhase(t *testing.T) {
+	ws := wsWithFinalizer("creating-ws", "grace")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "grace-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "grace-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseCreating {
+		t.Errorf("status.phase = %q, want Creating", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_PodStartingNoPhase(t *testing.T) {
+	ws := wsWithFinalizer("noPhase-ws", "heidi")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "heidi-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	// Pod with no phase set at all → triggers "Pod starting" message.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "heidi-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseCreating {
+		t.Errorf("status.phase = %q, want Creating", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_IdleTimeout(t *testing.T) {
+	ws := wsWithFinalizer("idle-ws", "ivan")
+	// LastAccessed was 2 hours ago.
+	ws.Status.LastAccessed = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "ivan-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "ivan-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+	// IdleTimeout of 1 hour → workspace that was last accessed 2 hours ago is idle.
+	r.IdleTimeout = time.Hour
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	// Pod should be deleted.
+	var p corev1.Pod
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "ivan-workspace-pod", Namespace: "default"}, &p); err == nil {
+		t.Error("expected pod to be deleted after idle timeout")
+	}
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseStopped {
+		t.Errorf("status.phase = %q, want Stopped", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_PodImageChanged(t *testing.T) {
+	ctx := context.Background()
+	ws := wsWithFinalizer("imgchange-ws", "judy")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "judy-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	// Pod was created with an old image.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "judy-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:old"}},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+	// New desired image differs from the pod's current image.
+	r.WorkspaceImage = "workspace:new"
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	// Pod should be deleted so the next reconcile recreates it with the new image.
+	var p corev1.Pod
+	if err := fc.Get(ctx, types.NamespacedName{Name: "judy-workspace-pod", Namespace: "default"}, &p); err == nil {
+		t.Error("expected outdated pod to be deleted after image change")
+	}
+}
+
+func TestReconcile_DefaultWorkspaceImage(t *testing.T) {
+	ws := wsWithFinalizer("default-img-ws", "kim")
+	r, _ := newFakeReconciler(t, ws)
+	r.WorkspaceImage = "" // empty → should use "workspace:latest"
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	// Run enough reconciles to create the Pod.
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: nn}); err != nil {
+			t.Fatalf("Reconcile %d: %v", i, err)
+		}
+	}
+	// Just verify reconcile didn't error — the image path is exercised.
 }
