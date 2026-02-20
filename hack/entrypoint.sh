@@ -32,19 +32,25 @@ fi
 # ── opencode ──────────────────────────────────────────────────────────────────
 # Rewritten on every start so changes to env vars (e.g. new LLM endpoint)
 # are always reflected without manual intervention.
-# Config reference: https://github.com/opencode-ai/opencode
-cat > "${HOME}/.opencode.json" <<EOF
+# Global config location: ~/.config/opencode/opencode.json
+# Config reference: https://opencode.ai/docs/configuration/overview
+mkdir -p "${HOME}/.config/opencode"
+cat > "${HOME}/.config/opencode/opencode.json" <<EOF
 {
-  "providers": {
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
     "local": {
-      "endpoint": "${OPENAI_BASE_URL}/v1",
-      "apiKey": "no-key-required"
-    }
-  },
-  "agents": {
-    "coder": {
-      "model": "local/${MODEL_NAME}",
-      "maxTokens": 8192
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Local vLLM",
+      "options": {
+        "baseURL": "${OPENAI_BASE_URL}/v1",
+        "apiKey": "no-key-required"
+      },
+      "models": {
+        "${MODEL_NAME}": {
+          "name": "${MODEL_NAME}"
+        }
+      }
     }
   }
 }
@@ -61,14 +67,134 @@ fi
 # ── zsh config (bootstrapped once; user can edit afterwards) ─────────────────
 if [ ! -f "${HOME}/.zshrc" ]; then
   cat > "${HOME}/.zshrc" <<'ZSHRC'
+# ── PATH ──────────────────────────────────────────────────────────────────────
 export PATH="/usr/local/go/bin:${HOME}/go/bin:$PATH"
 export GOPATH="${HOME}/go"
+
+# ── History ───────────────────────────────────────────────────────────────────
 export HISTFILE="${HOME}/.zsh_history"
 export HISTSIZE=10000
 export SAVEHIST=10000
-setopt SHARE_HISTORY
-PS1='%F{green}%n%f@workspace:%F{blue}%~%f%# '
+setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE
+
+# ── Useful zsh options ────────────────────────────────────────────────────────
+setopt AUTO_CD
+setopt CORRECT
+setopt GLOB_COMPLETE
+setopt NO_BEEP
+
+# ── Plugins ───────────────────────────────────────────────────────────────────
+source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# ── Starship prompt ───────────────────────────────────────────────────────────
+eval "$(starship init zsh)"
 ZSHRC
+fi
+
+# ── Starship config (bootstrapped once; user can edit afterwards) ─────────────
+if [ ! -f "${HOME}/.config/starship.toml" ]; then
+  mkdir -p "${HOME}/.config"
+  cat > "${HOME}/.config/starship.toml" <<'STARSHIP'
+format = "$username$directory$git_branch$git_status$golang$nodejs$python$cmd_duration$line_break$character"
+
+[username]
+show_always = true
+format  = "[$user]($style)@workspace "
+style_user = "bold green"
+style_root = "bold red"
+
+[directory]
+format            = "[$path]($style) "
+style             = "bold blue"
+truncation_length = 4
+truncate_to_repo  = true
+
+[git_branch]
+format = "[($branch)]($style) "
+style  = "bold purple"
+
+[git_status]
+format    = '[$all_status$ahead_behind]($style) '
+style     = "bold yellow"
+ahead     = "↑${count}"
+behind    = "↓${count}"
+diverged  = "↕"
+staged    = "+${count}"
+modified  = "~${count}"
+untracked = "?${count}"
+deleted   = "-${count}"
+
+[golang]
+format = "[Go $version]($style) "
+style  = "bold cyan"
+
+[nodejs]
+format = "[Node $version]($style) "
+style  = "bold green"
+
+[python]
+format = "[Py $version]($style) "
+style  = "bold yellow"
+
+[cmd_duration]
+min_time = 2000
+format   = "[took $duration]($style) "
+style    = "bold yellow"
+
+[character]
+success_symbol = "[>](bold green)"
+error_symbol   = "[>](bold red)"
+STARSHIP
+fi
+
+# ── tmux config (bootstrapped once; user can edit afterwards) ─────────────────
+if [ ! -f "${HOME}/.tmux.conf" ]; then
+  cat > "${HOME}/.tmux.conf" <<'TMUXCONF'
+# ── Terminal / Colors ─────────────────────────────────────────────────────────
+set -g default-terminal "screen-256color"
+set -ga terminal-overrides ",xterm-256color:Tc"
+
+# ── General ───────────────────────────────────────────────────────────────────
+set -g mouse on
+set -g history-limit 10000
+set -g escape-time 10
+set -g focus-events on
+set -g base-index 1
+setw -g pane-base-index 1
+setw -g automatic-rename on
+
+# ── Prefix: Ctrl-Space ────────────────────────────────────────────────────────
+unbind C-b
+set -g prefix C-Space
+bind C-Space send-prefix
+
+# ── Splits (keep current path) ────────────────────────────────────────────────
+bind | split-window -h -c "#{pane_current_path}"
+bind - split-window -v -c "#{pane_current_path}"
+
+# ── Reload config ─────────────────────────────────────────────────────────────
+bind r source-file ~/.tmux.conf \; display 'Config reloaded!'
+
+# ── Pane borders (Tokyo Night palette) ────────────────────────────────────────
+set -g pane-border-style        'fg=#3b4261'
+set -g pane-active-border-style 'fg=#7aa2f7'
+
+# ── Status bar ────────────────────────────────────────────────────────────────
+set -g status on
+set -g status-interval 5
+set -g status-position bottom
+set -g status-style          'bg=#1a1b26 fg=#a9b1d6'
+
+set -g status-left-length 30
+set -g status-left  '#[bg=#7aa2f7,fg=#1a1b26,bold] #S #[bg=#1a1b26,fg=#7aa2f7] '
+
+set -g status-right-length 40
+set -g status-right '#[fg=#565f89] %Y-%m-%d #[fg=#a9b1d6]%H:%M '
+
+set -g window-status-current-format '#[bg=#7aa2f7,fg=#1a1b26,bold] #I:#W '
+set -g window-status-format         '#[fg=#565f89] #I:#W '
+TMUXCONF
 fi
 
 # ── Welcome message ───────────────────────────────────────────────────────────
