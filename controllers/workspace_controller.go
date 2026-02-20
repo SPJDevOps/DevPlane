@@ -241,12 +241,15 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
-	// Wait for PVC to be bound
-	if pvc.Status.Phase != corev1.ClaimBound {
-		if updateErr := r.updateStatus(ctx, &ws, "Creating", "", "", "", "Waiting for PVC to bind"); updateErr != nil {
+	// Only block on a permanently lost PVC — a Pending PVC with WaitForFirstConsumer
+	// binding mode will not bind until a pod consuming it is scheduled, so we must
+	// proceed to pod creation and let Kubernetes resolve the binding.
+	if pvc.Status.Phase == corev1.ClaimLost {
+		msg := "PVC lost — manual intervention required"
+		if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", msg); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		return ctrl.Result{}, nil
 	}
 
 	// Ensure Pod
