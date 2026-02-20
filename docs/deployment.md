@@ -36,38 +36,69 @@ The Helm chart creates the `workspaces` namespace by default (`gateway.createWor
 
 ---
 
+## Published images and Helm chart
+
+Pre-built, multi-arch (`linux/amd64` + `linux/arm64`) images are published to the GitHub Container Registry for every release:
+
+| Image | Registry path |
+|-------|---------------|
+| Operator  | `ghcr.io/spjdevops/devplane/workspace-operator` |
+| Gateway   | `ghcr.io/spjdevops/devplane/workspace-gateway`  |
+| Workspace | `ghcr.io/spjdevops/devplane/workspace`          |
+
+The Helm chart is served from the GitHub Pages Helm repository:
+
+```
+https://spjdevops.github.io/DevPlane
+```
+
+Available chart versions: [index.yaml](https://spjdevops.github.io/DevPlane/index.yaml)
+
+---
+
 ## Installation
 
-### 1. Build & push images
+### 1. Images
+
+**Standard (internet-connected) cluster** — the default `values.yaml` already points at the published GHCR images; no extra steps are needed.
+
+**Air-gapped cluster** — mirror the images to your internal registry first:
 
 ```bash
-# Build all three images
-make docker-build
-
-# Tag and push to your registry (replace REGISTRY)
 REGISTRY=registry.example.com/devplane
+VERSION=1.0.0
 
-docker tag workspace-operator:latest  $REGISTRY/workspace-operator:v1.0.0
-docker tag workspace-gateway:latest   $REGISTRY/workspace-gateway:v1.0.0
-docker tag workspace:latest           $REGISTRY/workspace:v1.0.0
+for img in workspace-operator workspace-gateway workspace; do
+  docker pull ghcr.io/spjdevops/devplane/${img}:${VERSION}
+  docker tag  ghcr.io/spjdevops/devplane/${img}:${VERSION} ${REGISTRY}/${img}:${VERSION}
+  docker push ${REGISTRY}/${img}:${VERSION}
+done
+```
 
-docker push $REGISTRY/workspace-operator:v1.0.0
-docker push $REGISTRY/workspace-gateway:v1.0.0
-docker push $REGISTRY/workspace:v1.0.0
+Then override the image repositories in your values file (see step 2).
+
+If you need to build from source instead:
+
+```bash
+make docker-build   # produces workspace-operator:latest, workspace-gateway:latest, workspace:latest
 ```
 
 ### 2. Install with Helm
 
+Add the Helm repository once:
+
 ```bash
-helm install workspace-operator deploy/helm/workspace-operator \
+helm repo add devplane https://spjdevops.github.io/DevPlane
+helm repo update
+```
+
+Install (quick start, public cluster):
+
+```bash
+helm install workspace-operator devplane/workspace-operator \
+  --version 1.0.0 \
   --namespace workspace-operator-system \
   --create-namespace \
-  --set operator.image.repository=registry.example.com/devplane/workspace-operator \
-  --set operator.image.tag=v1.0.0 \
-  --set gateway.image.repository=registry.example.com/devplane/workspace-gateway \
-  --set gateway.image.tag=v1.0.0 \
-  --set workspace.image.repository=registry.example.com/devplane/workspace \
-  --set workspace.image.tag=v1.0.0 \
   --set gateway.oidc.issuerURL=https://idp.example.com \
   --set gateway.oidc.clientID=devplane \
   --set 'workspace.ai.providers[0].name=local' \
@@ -81,15 +112,15 @@ Using a values file (recommended for production):
 # my-values.yaml
 operator:
   image:
-    repository: registry.example.com/devplane/workspace-operator
-    tag: v1.0.0
+    repository: ghcr.io/spjdevops/devplane/workspace-operator
+    tag: "1.0.0"
   replicas: 1
   leaderElect: true
 
 gateway:
   image:
-    repository: registry.example.com/devplane/workspace-gateway
-    tag: v1.0.0
+    repository: ghcr.io/spjdevops/devplane/workspace-gateway
+    tag: "1.0.0"
   replicas: 2
   workspaceNamespace: "workspaces"
   createWorkspaceNamespace: true
@@ -107,8 +138,8 @@ gateway:
 
 workspace:
   image:
-    repository: registry.example.com/devplane/workspace
-    tag: v1.0.0
+    repository: ghcr.io/spjdevops/devplane/workspace
+    tag: "1.0.0"
   defaultResources:
     cpu: "2"
     memory: "4Gi"
@@ -125,9 +156,27 @@ workspace:
 ```
 
 ```bash
-helm install workspace-operator deploy/helm/workspace-operator \
+helm install workspace-operator devplane/workspace-operator \
+  --version 1.0.0 \
   -n workspace-operator-system --create-namespace \
   -f my-values.yaml
+```
+
+**Air-gapped override** — if you mirrored images in step 1, add the private registry to your values file:
+
+```yaml
+operator:
+  image:
+    repository: registry.example.com/devplane/workspace-operator
+    tag: "1.0.0"
+gateway:
+  image:
+    repository: registry.example.com/devplane/workspace-gateway
+    tag: "1.0.0"
+workspace:
+  image:
+    repository: registry.example.com/devplane/workspace
+    tag: "1.0.0"
 ```
 
 ### 3. OIDC configuration
@@ -191,6 +240,134 @@ kubectl get workspace test-workspace -n workspaces -w
 
 # Confirm pod and PVC landed in workspaces namespace
 kubectl get pods,pvc -n workspaces
+```
+
+---
+
+## Private / Self-Signed CA Certificates
+
+If your OIDC provider (e.g. Keycloak) or internal services use a certificate signed by a private CA, you need that CA trusted in two places:
+
+- **Gateway** — makes outbound HTTPS calls to the OIDC issuer to validate tokens.
+- **Workspace pods** — users run `git`, `curl`, opencode, and other tools that need to trust the same CA.
+
+### 1. Create a ConfigMap with your CA certificate(s)
+
+Put every PEM-encoded CA certificate you need into a single ConfigMap. The keys can end in `.crt` or `.pem` — any filename works.
+
+```bash
+# Single CA file
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/your-ca.crt \
+  -n workspace-operator-system
+
+# Multiple CAs (e.g. root + intermediate)
+kubectl create configmap devplane-ca-bundle \
+  --from-file=root-ca.crt=/path/to/root-ca.crt \
+  --from-file=intermediate-ca.crt=/path/to/intermediate-ca.crt \
+  -n workspace-operator-system
+```
+
+> The ConfigMap must be in the same namespace as the gateway (`workspace-operator-system` by default).
+
+### 2. Configure the Gateway to trust the CA
+
+Set `gateway.tls.customCABundle.configMapName` in your values file:
+
+```yaml
+gateway:
+  tls:
+    customCABundle:
+      configMapName: devplane-ca-bundle
+```
+
+The Helm chart mounts the ConfigMap at `/etc/ssl/certs/custom` inside the gateway container and sets `SSL_CERT_FILE=/etc/ssl/certs/custom/ca-certificates.crt`, which Go's `net/http` (and therefore all OIDC validation) picks up automatically.
+
+### 3. Configure workspace pods to trust the CA
+
+Workspace pods are configured per-workspace via `spec.tls.customCABundle` on the Workspace CR. You can set a cluster-wide default by adding it to the operator's default workspace spec in `values.yaml`, or set it per-user workspace.
+
+**Option A — operator-wide default via values.yaml:**
+
+The Workspace CR created by the gateway inherits the operator's configured defaults. To have all workspace pods trust the CA, create a matching ConfigMap in the `workspaces` namespace and reference it in every Workspace CR, or set it as the default in your provisioning flow.
+
+```bash
+# Mirror the ConfigMap into the workspaces namespace
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/your-ca.crt \
+  -n workspaces
+```
+
+**Option B — per-workspace Workspace CR:**
+
+```yaml
+apiVersion: workspace.devplane.io/v1alpha1
+kind: Workspace
+metadata:
+  name: alice
+  namespace: workspaces
+spec:
+  user:
+    id: alice
+    email: alice@example.com
+  tls:
+    customCABundle:
+      name: devplane-ca-bundle   # ConfigMap in the workspaces namespace
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+    storage: "20Gi"
+  aiConfig:
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
+```
+
+### What happens inside the workspace pod
+
+The entrypoint script detects `CUSTOM_CA_MOUNTED=true` (set automatically by the operator when `spec.tls.customCABundle` is configured) and merges the custom certs with the system trust store:
+
+```
+/etc/ssl/certs/ca-certificates.crt  (system)
+/etc/ssl/certs/custom/*.crt         (your CA(s))
+/etc/ssl/certs/custom/*.pem         ──► /tmp/ca-bundle.crt
+```
+
+The following environment variables are then exported so every tool in the workspace trusts the CA without any manual steps:
+
+| Variable | Used by |
+|----------|---------|
+| `SSL_CERT_FILE` | Go binaries (opencode, custom tools) |
+| `REQUESTS_CA_BUNDLE` | Python `requests` / `httpx` |
+| `NODE_EXTRA_CA_CERTS` | Node.js / npm |
+
+`curl`, `git`, and `wget` use the system store which is updated via `update-ca-certificates` by the same bundle file.
+
+### Typical Keycloak setup
+
+```yaml
+# values.yaml excerpt
+gateway:
+  oidc:
+    issuerURL: https://keycloak.internal.example.com/realms/devplane
+    clientID: devplane
+  tls:
+    customCABundle:
+      configMapName: devplane-ca-bundle   # in workspace-operator-system namespace
+```
+
+```bash
+# CA bundle in operator namespace (for gateway)
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/internal-ca.crt \
+  -n workspace-operator-system
+
+# CA bundle in workspaces namespace (for workspace pods)
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/internal-ca.crt \
+  -n workspaces
 ```
 
 ---

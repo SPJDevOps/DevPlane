@@ -19,29 +19,57 @@ Use cases include DevOps in air-gapped environments, understanding codebases wit
 - **kubectl**: Configured for the target cluster.
 - **Optional**: `kustomize`, `controller-gen`, `golangci-lint` for manifests, code generation, and linting (see Makefile targets).
 
+## Published Releases
+
+Container images (multi-arch `linux/amd64` + `linux/arm64`) are published to the GitHub Container Registry:
+
+| Image | Pull reference |
+|-------|----------------|
+| Operator | `ghcr.io/spjdevops/devplane/workspace-operator:1.0.0` |
+| Gateway  | `ghcr.io/spjdevops/devplane/workspace-gateway:1.0.0`  |
+| Workspace | `ghcr.io/spjdevops/devplane/workspace:1.0.0`         |
+
+The Helm chart is published to the GitHub Pages Helm repository:
+
+```
+https://spjdevops.github.io/DevPlane
+```
+
+[index.yaml](https://spjdevops.github.io/DevPlane/index.yaml) · [GitHub Releases](https://github.com/SPJDevOps/DevPlane/releases)
+
 ## Quick Start
 
-1. **Install CRDs and run the operator locally** (against current kubeconfig):
+1. **Add the Helm repo and install**:
 
    ```bash
-   make manifests
-   make install                    # install CRDs (if you add an install target)
-   make run                        # run operator in foreground
+   helm repo add devplane https://spjdevops.github.io/DevPlane
+   helm repo update
+   helm install workspace-operator devplane/workspace-operator \
+     --version 1.0.0 \
+     --namespace workspace-operator-system \
+     --create-namespace \
+     --set gateway.oidc.issuerURL=https://idp.example.com \
+     --set gateway.oidc.clientID=devplane \
+     --set 'workspace.ai.providers[0].name=local' \
+     --set 'workspace.ai.providers[0].endpoint=http://vllm.ai-system.svc:8000' \
+     --set 'workspace.ai.providers[0].models[0]=deepseek-coder-33b-instruct'
    ```
 
-2. **Create a sample Workspace** (after ensuring the CRD is installed):
+2. **Create a sample Workspace** (after the operator is running):
 
    ```bash
    kubectl apply -f config/samples/workspace_v1alpha1_workspace.yaml
    ```
 
-3. **Deploy with Helm** (when the chart is ready):
+3. **Configure Gateway** with your OIDC issuer, client ID, and client secret, and point users at the Gateway URL (e.g. `https://devplane.company.com`). The Gateway will create or look up a Workspace per user and proxy the terminal WebSocket to the workspace pod.
+
+4. **Run the operator locally** against your current kubeconfig instead of deploying:
 
    ```bash
-   helm install workspace-operator deploy/helm/workspace-operator -n workspace-operator-system --create-namespace
+   make manifests
+   make install   # installs CRDs
+   make run       # runs operator in foreground
    ```
-
-4. **Configure Gateway** with your OIDC issuer, client ID, and client secret, and point users at the Gateway URL (e.g. `https://devplane.company.com`). The Gateway will create or look up a Workspace per user and proxy the terminal WebSocket to the workspace pod.
 
 ## Architecture Overview
 
@@ -153,6 +181,7 @@ Override operator-wide via `values.yaml` (`workspace.ai.egressPorts`) or per-wor
 - **Operator not reconciling**: Check operator logs and that the manager has RBAC to read/write Workspaces, Pods, PVCs, and Services.
 - **Pod stays Pending**: Check PVC binding and StorageClass; ensure no resource quota or scheduler issues.
 - **Gateway cannot create Workspace**: Ensure the Gateway’s ServiceAccount has RBAC to create/update Workspace CRs and to read their status.
+- **OIDC TLS errors / private CA**: If your IdP (e.g. Keycloak) uses a certificate signed by an internal CA, mount a CA bundle for both the gateway and workspace pods — see [Private CA certificates](./docs/deployment.md#private--self-signed-ca-certificates) in the deployment guide.
 - **Workspace cannot reach external service**: Verify the required port is in `egressPorts` (`kubectl get networkpolicy <userid>-workspace-egress -n workspaces -o yaml`).
 - **Workspace cannot reach in-cluster LLM**: Ensure the LLM namespace is listed in `egressNamespaces`.
 
