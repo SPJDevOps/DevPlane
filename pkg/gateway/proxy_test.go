@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,9 +65,11 @@ func TestCopyFrames_ForwardsMessages(t *testing.T) {
 	defer dstClientConn.Close()
 
 	// Wire copyFrames: src → dstClientConn.
+	// Use atomic to avoid a data race between the copyFrames goroutine (writer)
+	// and the test goroutine (reader).
 	errc := make(chan error, 1)
-	var activityCalled bool
-	go copyFrames(dstClientConn, src, errc, func() { activityCalled = true })
+	var activityCalled atomic.Bool
+	go copyFrames(dstClientConn, src, errc, func() { activityCalled.Store(true) })
 
 	// Inject a message through srcClientConn; the server-side (src) sees it and
 	// copyFrames relays it to dstClientConn, which sends it to dstSrv handler.
@@ -82,7 +85,7 @@ func TestCopyFrames_ForwardsMessages(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: message was not forwarded by copyFrames")
 	}
-	if !activityCalled {
+	if !activityCalled.Load() {
 		t.Error("onActivity callback was not called after forwarding a frame")
 	}
 }
