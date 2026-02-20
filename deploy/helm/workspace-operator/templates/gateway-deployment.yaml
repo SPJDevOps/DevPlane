@@ -43,10 +43,8 @@ spec:
               key: client-id
         - name: NAMESPACE
           value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
-        - name: LLM_ENDPOINT
-          value: {{ .Values.workspace.ai.endpoint | quote }}
-        - name: LLM_MODEL
-          value: {{ .Values.workspace.ai.model | quote }}
+        - name: AI_PROVIDERS_JSON
+          value: {{ .Values.workspace.ai.providers | toJson | quote }}
         {{- if .Values.gateway.tls.customCABundle.configMapName }}
         - name: SSL_CERT_FILE
           value: /etc/ssl/certs/custom/ca-certificates.crt

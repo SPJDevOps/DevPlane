@@ -38,14 +38,28 @@ type ResourceRequirements struct {
 	Storage string `json:"storage"`
 }
 
-// AIConfiguration configures the AI assistant backend.
+// AIProvider configures a single AI provider backend.
 // The endpoint must be OpenAI API-compatible (vLLM, Ollama, OpenWebUI, etc.).
-type AIConfiguration struct {
+type AIProvider struct {
+	// Name is the provider key used in the opencode configuration (e.g., "local", "cloud").
+	// Must be a non-empty identifier unique within the providers list.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 	// Endpoint is the base URL of the OpenAI-compatible LLM service
 	// (e.g., "http://vllm.ai-system.svc:8000", "http://ollama.ai-system.svc:11434").
+	// +kubebuilder:validation:MinLength=1
 	Endpoint string `json:"endpoint"`
-	// Model is the model identifier (e.g., "deepseek-coder-33b-instruct").
-	Model string `json:"model"`
+	// Models lists one or more model identifiers served by this provider.
+	// +kubebuilder:validation:MinItems=1
+	Models []string `json:"models"`
+}
+
+// AIConfiguration configures the AI assistant backend.
+type AIConfiguration struct {
+	// Providers is the list of AI provider backends available to this workspace.
+	// At least one provider must be specified.
+	// +kubebuilder:validation:MinItems=1
+	Providers []AIProvider `json:"providers"`
 	// EgressNamespaces lists Kubernetes namespaces where LLM services run.
 	// NetworkPolicy egress rules allow traffic to all pods in these namespaces.
 	// +optional

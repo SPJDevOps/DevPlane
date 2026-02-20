@@ -2,6 +2,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -154,12 +155,7 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 							MountPath: "/tmp",
 						},
 					},
-					Env: []corev1.EnvVar{
-						{Name: "OPENAI_BASE_URL", Value: workspace.Spec.AIConfig.Endpoint},
-						{Name: "MODEL_NAME", Value: workspace.Spec.AIConfig.Model},
-						{Name: "USER_EMAIL", Value: workspace.Spec.User.Email},
-						{Name: "USER_ID", Value: workspace.Spec.User.ID},
-					},
+					Env: buildEnvVars(workspace),
 				},
 			},
 			Volumes: []corev1.Volume{
@@ -275,13 +271,33 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	if _, err := resource.ParseQuantity(s.Resources.Storage); err != nil {
 		return fmt.Errorf("spec.resources.storage invalid: %w", err)
 	}
-	if s.AIConfig.Endpoint == "" {
-		return errors.New("spec.aiConfig.endpoint is required")
+	if len(s.AIConfig.Providers) == 0 {
+		return errors.New("spec.aiConfig.providers must have at least one entry")
 	}
-	if s.AIConfig.Model == "" {
-		return errors.New("spec.aiConfig.model is required")
+	for i, p := range s.AIConfig.Providers {
+		if p.Name == "" {
+			return fmt.Errorf("spec.aiConfig.providers[%d].name is required", i)
+		}
+		if p.Endpoint == "" {
+			return fmt.Errorf("spec.aiConfig.providers[%d].endpoint is required", i)
+		}
+		if len(p.Models) == 0 {
+			return fmt.Errorf("spec.aiConfig.providers[%d].models must have at least one entry", i)
+		}
 	}
 	return nil
+}
+
+// buildEnvVars constructs the container environment variables for a workspace pod.
+// AI provider configuration is serialised to JSON so the entrypoint script can
+// iterate over providers without requiring a template engine.
+func buildEnvVars(workspace *workspacev1alpha1.Workspace) []corev1.EnvVar {
+	providersJSON, _ := json.Marshal(workspace.Spec.AIConfig.Providers)
+	return []corev1.EnvVar{
+		{Name: "AI_PROVIDERS_JSON", Value: string(providersJSON)},
+		{Name: "USER_EMAIL", Value: workspace.Spec.User.Email},
+		{Name: "USER_ID", Value: workspace.Spec.User.ID},
+	}
 }
 
 func ptr[T any](v T) *T {

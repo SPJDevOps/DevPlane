@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -42,8 +43,13 @@ func main() {
 	clientID := mustEnv("OIDC_CLIENT_ID")
 	namespace := envOr("NAMESPACE", "default")
 	port := envOr("PORT", "8080")
-	llmEndpoint := envOr("LLM_ENDPOINT", "http://vllm.ai-system.svc:8000")
-	llmModel := envOr("LLM_MODEL", "deepseek-coder-33b-instruct")
+	aiProvidersJSON := envOr("AI_PROVIDERS_JSON",
+		`[{"name":"local","endpoint":"http://vllm.ai-system.svc:8000","models":["deepseek-coder-33b-instruct"]}]`)
+	var aiProviders []workspacev1alpha1.AIProvider
+	if err := json.Unmarshal([]byte(aiProvidersJSON), &aiProviders); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse AI_PROVIDERS_JSON: %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx := ctrl.SetupSignalHandler()
 
@@ -66,8 +72,7 @@ func main() {
 	}
 
 	lifecycle := gw.NewLifecycleManager(k8sClient, log, gw.LifecycleConfig{
-		LLMEndpoint:    llmEndpoint,
-		LLMModel:       llmModel,
+		Providers:      aiProviders,
 		DefaultCPU:     "2",
 		DefaultMemory:  "4Gi",
 		DefaultStorage: "20Gi",

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,8 +67,9 @@ func minimalWorkspace() *workspacev1alpha1.Workspace {
 				CPU: "1", Memory: "2Gi", Storage: "20Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm:8000",
-				Model:    "model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
 			},
 			Persistence: workspacev1alpha1.PersistenceConfig{StorageClass: "standard"},
 		},
@@ -165,13 +167,24 @@ func TestBuildPod(t *testing.T) {
 	for _, e := range c.Env {
 		envMap[e.Name] = e.Value
 	}
-	for _, name := range []string{"OPENAI_BASE_URL", "MODEL_NAME", "USER_EMAIL", "USER_ID"} {
+	for _, name := range []string{"AI_PROVIDERS_JSON", "USER_EMAIL", "USER_ID"} {
 		if _, ok := envMap[name]; !ok {
 			t.Errorf("missing env %q", name)
 		}
 	}
 	if envMap["USER_ID"] != "john" || envMap["USER_EMAIL"] != "john@example.com" {
 		t.Errorf("USER_ID=%q USER_EMAIL=%q", envMap["USER_ID"], envMap["USER_EMAIL"])
+	}
+	// Verify AI_PROVIDERS_JSON round-trips correctly.
+	var providers []workspacev1alpha1.AIProvider
+	if err := json.Unmarshal([]byte(envMap["AI_PROVIDERS_JSON"]), &providers); err != nil {
+		t.Fatalf("AI_PROVIDERS_JSON is not valid JSON: %v", err)
+	}
+	if len(providers) != 1 || providers[0].Name != "local" || providers[0].Endpoint != "http://vllm:8000" {
+		t.Errorf("AI_PROVIDERS_JSON providers = %+v", providers)
+	}
+	if len(providers[0].Models) != 1 || providers[0].Models[0] != "model" {
+		t.Errorf("AI_PROVIDERS_JSON models = %v", providers[0].Models)
 	}
 	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != "Workspace" {
 		t.Errorf("expected Workspace owner reference, got %v", pod.OwnerReferences)
@@ -318,19 +331,41 @@ func TestValidateSpec_MissingStorage(t *testing.T) {
 	}
 }
 
-func TestValidateSpec_MissingEndpoint(t *testing.T) {
+func TestValidateSpec_EmptyProviders(t *testing.T) {
 	ws := minimalWorkspace()
-	ws.Spec.AIConfig.Endpoint = ""
+	ws.Spec.AIConfig.Providers = nil
 	if err := ValidateSpec(ws); err == nil {
-		t.Error("ValidateSpec: expected error for missing aiConfig.endpoint")
+		t.Error("ValidateSpec: expected error for empty aiConfig.providers")
 	}
 }
 
-func TestValidateSpec_MissingModel(t *testing.T) {
+func TestValidateSpec_ProviderMissingName(t *testing.T) {
 	ws := minimalWorkspace()
-	ws.Spec.AIConfig.Model = ""
+	ws.Spec.AIConfig.Providers = []workspacev1alpha1.AIProvider{
+		{Name: "", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+	}
 	if err := ValidateSpec(ws); err == nil {
-		t.Error("ValidateSpec: expected error for missing aiConfig.model")
+		t.Error("ValidateSpec: expected error for provider with empty name")
+	}
+}
+
+func TestValidateSpec_ProviderMissingEndpoint(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.AIConfig.Providers = []workspacev1alpha1.AIProvider{
+		{Name: "local", Endpoint: "", Models: []string{"model"}},
+	}
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for provider with empty endpoint")
+	}
+}
+
+func TestValidateSpec_ProviderMissingModels(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.AIConfig.Providers = []workspacev1alpha1.AIProvider{
+		{Name: "local", Endpoint: "http://vllm:8000", Models: nil},
+	}
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for provider with no models")
 	}
 }
 

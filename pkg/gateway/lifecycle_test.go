@@ -26,8 +26,9 @@ var testScheme = func() *runtime.Scheme {
 
 func testConfig() LifecycleConfig {
 	return LifecycleConfig{
-		LLMEndpoint:    "http://vllm:8000",
-		LLMModel:       "model",
+		Providers: []workspacev1alpha1.AIProvider{
+			{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+		},
 		DefaultCPU:     "1",
 		DefaultMemory:  "1Gi",
 		DefaultStorage: "10Gi",
@@ -53,7 +54,11 @@ func TestEnsureWorkspace_CreatesNew(t *testing.T) {
 		Spec: workspacev1alpha1.WorkspaceSpec{
 			User:      workspacev1alpha1.UserInfo{ID: "user1", Email: "user1@test.com"},
 			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
-			AIConfig:  workspacev1alpha1.AIConfiguration{Endpoint: "http://vllm:8000", Model: "model"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
 		},
 	}
 	if err := fc.Create(ctx, ws); err != nil {
@@ -92,7 +97,11 @@ func TestEnsureWorkspace_FailedWorkspace(t *testing.T) {
 		Spec: workspacev1alpha1.WorkspaceSpec{
 			User:      workspacev1alpha1.UserInfo{ID: "user2", Email: "user2@test.com"},
 			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
-			AIConfig:  workspacev1alpha1.AIConfiguration{Endpoint: "http://vllm:8000", Model: "model"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
 		},
 	}
 	if err := fc.Create(ctx, ws); err != nil {
@@ -174,7 +183,11 @@ func TestLifecycleManager_GetExisting(t *testing.T) {
 		Spec: workspacev1alpha1.WorkspaceSpec{
 			User:      workspacev1alpha1.UserInfo{ID: "existing", Email: "e@test.com"},
 			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "5Gi"},
-			AIConfig:  workspacev1alpha1.AIConfiguration{Endpoint: "http://vllm:8000", Model: "m"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"m"}},
+				},
+			},
 		},
 	}
 	if err := fc.Create(ctx, ws); err != nil {

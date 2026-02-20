@@ -16,7 +16,14 @@ spec:
     memory: "4Gi"
     storage: "20Gi"
   aiConfig:
-    endpoint: "http://vllm.ai-system.svc.cluster.local:8000"
-    model: deepseek-coder-33b-instruct
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc.cluster.local:8000"
+        models:
+          - deepseek-coder-33b-instruct
+      - name: cloud
+        endpoint: "http://ollama.ai-system.svc.cluster.local:11434"
+        models:
+          - llama3
   persistence:
     storageClass: standard

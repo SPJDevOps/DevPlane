@@ -37,6 +37,8 @@ spec:
           value: {{ .Values.workspace.ai.egressNamespaces | join "," | quote }}
         - name: EGRESS_PORTS
           value: {{ .Values.workspace.ai.egressPorts | join "," | quote }}
+        - name: AI_PROVIDERS_JSON
+          value: {{ .Values.workspace.ai.providers | toJson | quote }}
         {{- if .Values.workspace.idleTimeout }}
         - name: IDLE_TIMEOUT
           value: {{ .Values.workspace.idleTimeout | quote }}

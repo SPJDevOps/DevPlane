@@ -123,8 +123,9 @@ func TestReconcile_Integration(t *testing.T) {
 				CPU: "100m", Memory: "128Mi", Storage: "1Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm:8000",
-				Model:    "model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
 			},
 			Persistence: workspacev1alpha1.PersistenceConfig{},
 		},
@@ -141,7 +142,14 @@ func TestReconcile_Integration(t *testing.T) {
 
 	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
 
-	// First reconcile: should create PVC
+	// First reconcile: registers the finalizer and returns early (Requeue:true).
+	// No owned resources are created yet at this stage.
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	if err != nil {
+		t.Fatalf("Reconcile (finalizer): %v", err)
+	}
+
+	// Second reconcile: should create RBAC, NetworkPolicies, and PVC
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		t.Fatalf("Reconcile (1): %v", err)
@@ -190,7 +198,7 @@ func TestReconcile_Integration(t *testing.T) {
 		t.Fatalf("Patch PVC status: %v", err)
 	}
 
-	// Second reconcile: should create Pod
+	// Third reconcile: should create Pod
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		t.Fatalf("Reconcile (2): %v", err)
@@ -204,7 +212,7 @@ func TestReconcile_Integration(t *testing.T) {
 		t.Errorf("Pod owner ref: %v", pod.OwnerReferences)
 	}
 
-	// Third reconcile: should create Service
+	// Fourth reconcile: should create Service
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		t.Fatalf("Reconcile (3): %v", err)
@@ -230,7 +238,7 @@ func TestReconcile_Integration(t *testing.T) {
 		t.Fatalf("Patch Pod status: %v", err)
 	}
 
-	// Fourth reconcile: should update Workspace status to Running
+	// Fifth reconcile: should update Workspace status to Running
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		t.Fatalf("Reconcile (4): %v", err)
@@ -281,9 +289,13 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 	ws := &workspacev1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "invalid-ws", Namespace: "default"},
 		Spec: workspacev1alpha1.WorkspaceSpec{
-			User:        workspacev1alpha1.UserInfo{ID: "", Email: "j@example.com"},
-			Resources:   workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "1Gi"},
-			AIConfig:    workspacev1alpha1.AIConfiguration{Endpoint: "http://x", Model: "m"},
+			User:      workspacev1alpha1.UserInfo{ID: "", Email: "j@example.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "1Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://x", Models: []string{"m"}},
+				},
+			},
 			Persistence: workspacev1alpha1.PersistenceConfig{},
 		},
 	}

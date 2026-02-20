@@ -30,8 +30,9 @@ func minimalWorkspace() *workspacev1alpha1.Workspace {
 				CPU: "1", Memory: "2Gi", Storage: "20Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm:8000",
-				Model:    "model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
 			},
 		},
 	}

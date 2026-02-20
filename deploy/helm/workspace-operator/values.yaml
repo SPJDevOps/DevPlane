@@ -57,8 +57,14 @@ workspace:
     storage: "20Gi"
   storageClass: ""
   ai:
-    endpoint: "http://vllm.ai-system.svc:8000"
-    model: "deepseek-coder-33b-instruct"
+    # providers is the list of AI provider backends available to workspace pods.
+    # Each entry requires a name (used as the opencode provider key), an endpoint
+    # (OpenAI-compatible base URL), and at least one model ID.
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
     # egressNamespaces is the list of Kubernetes namespaces where LLM services run.
     # Workspace pods are allowed to reach all pods in these namespaces (any port).
     # The operator joins this list into a comma-separated LLM_NAMESPACES env var.

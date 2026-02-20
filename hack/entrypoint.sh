@@ -6,8 +6,7 @@ set -euo pipefail
 
 # ── Required environment variables ───────────────────────────────────────────
 # Fail fast with a clear message if the operator failed to inject these.
-: "${OPENAI_BASE_URL:?OPENAI_BASE_URL must be set by the operator (spec.aiConfig.endpoint)}"
-: "${MODEL_NAME:?MODEL_NAME must be set by the operator (spec.aiConfig.model)}"
+: "${AI_PROVIDERS_JSON:?AI_PROVIDERS_JSON must be set by the operator (spec.aiConfig.providers)}"
 
 # ── SSH / kube / gitconfig permissions ───────────────────────────────────────
 # The PVC does not guarantee Unix permissions are preserved, so fix them on
@@ -40,26 +39,19 @@ fi
 # Global config location: ~/.config/opencode/opencode.json
 # Config reference: https://opencode.ai/docs/configuration/overview
 mkdir -p "${HOME}/.config/opencode"
-cat > "${HOME}/.config/opencode/opencode.json" <<EOF
-{
-  "\$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "local": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Local vLLM",
-      "options": {
-        "baseURL": "${OPENAI_BASE_URL}/v1",
-        "apiKey": "no-key-required"
-      },
-      "models": {
-        "${MODEL_NAME}": {
-          "name": "${MODEL_NAME}"
-        }
-      }
+python3 -c "
+import json, os, sys
+providers = json.loads(os.environ['AI_PROVIDERS_JSON'])
+cfg = {'\$schema': 'https://opencode.ai/config.json', 'provider': {}}
+for p in providers:
+    cfg['provider'][p['name']] = {
+        'npm': '@ai-sdk/openai-compatible',
+        'name': p['name'],
+        'options': {'baseURL': p['endpoint'] + '/v1', 'apiKey': 'no-key-required'},
+        'models': {m: {'name': m} for m in p['models']}
     }
-  }
-}
-EOF
+print(json.dumps(cfg, indent=2))
+" > "${HOME}/.config/opencode/opencode.json"
 
 # ── Git identity ──────────────────────────────────────────────────────────────
 if [ -n "${USER_EMAIL:-}" ]; then
@@ -203,15 +195,23 @@ TMUXCONF
 fi
 
 # ── Welcome message ───────────────────────────────────────────────────────────
+_providers_summary=$(python3 -c "
+import json, os
+providers = json.loads(os.environ.get('AI_PROVIDERS_JSON', '[]'))
+for p in providers:
+    models = ', '.join(p.get('models', []))
+    print(f'    - {p[\"name\"]}: {models}')
+" 2>/dev/null || echo "    (not configured)")
+
 cat > /tmp/welcome.txt <<EOF
 
   ╔══════════════════════════════════════════════════════╗
   ║           DevPlane  —  Development Workspace         ║
   ╚══════════════════════════════════════════════════════╝
 
-  User:     ${USER_ID:-unknown}
-  AI model: ${MODEL_NAME:-not configured}
-  Endpoint: ${OPENAI_BASE_URL:-not configured}
+  User:  ${USER_ID:-unknown}
+  AI providers:
+${_providers_summary}
 
   Tools: kubectl  helm  k9s  go  node  python3  git  opencode
   Type 'opencode' to start the AI assistant.

@@ -131,8 +131,9 @@ func TestWorkspaceReconciliation(t *testing.T) {
 				Storage: "1Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm.ai-system.svc:8000",
-				Model:    "test-model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm.ai-system.svc:8000", Models: []string{"test-model"}},
+				},
 			},
 		},
 	}
@@ -270,8 +271,9 @@ func TestWorkspaceDeletion(t *testing.T) {
 				Storage: "1Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm.ai-system.svc:8000",
-				Model:    "test-model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm.ai-system.svc:8000", Models: []string{"test-model"}},
+				},
 			},
 		},
 	}
@@ -331,8 +333,9 @@ func TestWorkspaceInvalidSpec(t *testing.T) {
 				Storage: "1Gi",
 			},
 			AIConfig: workspacev1alpha1.AIConfiguration{
-				Endpoint: "http://vllm:8000",
-				Model:    "model",
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
 			},
 		},
 	}

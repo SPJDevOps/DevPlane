@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	tokenCacheTTL  = 5 * time.Minute
-	tokenCacheMax  = 10_000 // maximum number of entries to prevent unbounded growth
+	tokenCacheTTL = 5 * time.Minute
+	tokenCacheMax = 10_000 // maximum number of entries to prevent unbounded growth
 )
 
 // Claims holds verified identity extracted from an OIDC token.
