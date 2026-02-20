@@ -1,19 +1,19 @@
 # DevPlane
 
-DevPlane is a Kubernetes operator that provides **AI-powered development workspaces** for air-gapped and restricted environments. Developers authenticate via OIDC, get isolated terminal sessions with persistent storage, and a pre-configured AI coding assistant (OpenCoder) connected to an in-cluster vLLM endpoint.
+DevPlane is a Kubernetes operator that provides **AI-powered development workspaces** for air-gapped and restricted environments. Developers authenticate via OIDC, get isolated terminal sessions with persistent storage, and a pre-configured AI coding assistant (opencode) connected to any OpenAI-compatible LLM endpoint.
 
 ## Project Overview
 
 - **Operator**: Watches `Workspace` custom resources and creates per-user Pods, PVCs, and Services with strict security settings.
 - **Gateway**: Handles OIDC login and proxies WebSocket traffic to the user’s workspace pod.
-- **Workspace Pod**: Ubuntu-based container with ttyd, tmux, and OpenCoder, configured to use your vLLM service.
+- **Workspace Pod**: Ubuntu-based container with ttyd, tmux, and opencode, pre-configured to connect to any OpenAI-compatible LLM endpoint.
 
 Use cases include DevOps in air-gapped environments, understanding codebases with AI, planning implementations, and data science with AI-assisted Python.
 
 ## Prerequisites
 
-- **Kubernetes**: 1.27 or later (tested against 1.27, 1.28, 1.29).
-- **vLLM**: A running vLLM (or compatible) service inside the cluster, e.g. in a dedicated namespace (e.g. `ai-system`), reachable at a URL like `http://vllm.ai-system.svc.cluster.local:8000`.
+- **Kubernetes**: 1.27 or later.
+- **LLM endpoint (optional)**: Any OpenAI-compatible API reachable from workspace pods — vLLM, Ollama, LM Studio, or a hosted service. Without one, the shell and all dev tools still work; `opencode` will simply report a connection error.
 - **OIDC**: An OIDC-compatible IdP (e.g. Keycloak, Dex, Okta) for Gateway authentication.
 - **Go**: 1.21+ for building the operator and gateway.
 - **kubectl**: Configured for the target cluster.
@@ -88,6 +88,8 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for:
    ```bash
    make run
    ```
+
+   For a walkthrough of testing the workspace image with Docker and the full stack with KIND, see **[docs/local-development.md](./docs/local-development.md)**.
 
 6. **Docker images**
 
