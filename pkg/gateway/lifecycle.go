@@ -96,8 +96,8 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 }
 
 // waitForRunning polls until the Workspace reaches Running or the deadline passes.
-// It also handles the Stopped phase by returning an error immediately rather than
-// waiting out the full timeout.
+// When the workspace is Stopped it patches the status to clear the phase, allowing
+// the operator to recreate the pod, then continues polling.
 func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.NamespacedName) (*workspacev1alpha1.Workspace, error) {
 	deadline := time.Now().Add(workspaceReadyTimeout)
 	for time.Now().Before(deadline) {
@@ -106,12 +106,20 @@ func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.Namespa
 			return nil, fmt.Errorf("get workspace %q: %w", key.Name, err)
 		}
 		switch ws.Status.Phase {
-		case "Running":
+		case workspacev1alpha1.WorkspacePhaseRunning:
 			return ws, nil
-		case "Failed":
+		case workspacev1alpha1.WorkspacePhaseFailed:
 			return nil, fmt.Errorf("workspace %q failed: %s", key.Name, ws.Status.Message)
-		case "Stopped":
-			return nil, fmt.Errorf("workspace %q is stopped", key.Name)
+		case workspacev1alpha1.WorkspacePhaseStopped:
+			// Clear the Stopped phase so the operator reconcile loop recreates the pod.
+			m.log.Info("Restarting stopped workspace", "workspace", key.Name)
+			patchBase := ws.DeepCopy()
+			ws.Status.Phase = ""
+			ws.Status.Message = ""
+			ws.Status.PodName = ""
+			if patchErr := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); patchErr != nil {
+				return nil, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
+			}
 		}
 		m.log.Info("Waiting for workspace", "workspace", key.Name, "phase", ws.Status.Phase)
 		select {
@@ -121,4 +129,15 @@ func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.Namespa
 		}
 	}
 	return nil, fmt.Errorf("workspace %q not ready after %s", key.Name, workspaceReadyTimeout)
+}
+
+// TouchLastAccessed stamps the workspace's LastAccessed to now.
+// Called on each proxied WebSocket message to keep idle-timeout tracking accurate.
+// Updates are best-effort; errors are logged but do not interrupt the session.
+func (m *LifecycleManager) TouchLastAccessed(ctx context.Context, ws *workspacev1alpha1.Workspace) {
+	patchBase := ws.DeepCopy()
+	ws.Status.LastAccessed = metav1.Now()
+	if err := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); err != nil {
+		m.log.Error(err, "Failed to update LastAccessed", "workspace", ws.Name)
+	}
 }

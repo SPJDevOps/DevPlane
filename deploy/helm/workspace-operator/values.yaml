@@ -4,7 +4,7 @@
 operator:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-operator
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
   resources:
@@ -20,7 +20,7 @@ gateway:
   enabled: true
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-gateway
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   replicas: 2
   resources:
@@ -50,7 +50,7 @@ gateway:
 workspace:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace
-    tag: latest
+    tag: ""
   defaultResources:
     cpu: "2"
     memory: "4Gi"

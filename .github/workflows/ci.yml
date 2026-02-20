@@ -1,12 +1,8 @@
 # Continuous integration: run on every push to main and on every PR targeting main.
 #
-# Steps:
-#   1. go vet + go fmt check
-#   2. golangci-lint
-#   3. Unit tests (short mode — no envtest binary download, runs in < 60s)
-#
-# Integration tests that require envtest (etcd/kube-apiserver) are intentionally
-# excluded here to keep CI fast; run `make test` locally or in a dedicated job.
+# Jobs:
+#   lint-and-test  – go vet, golangci-lint, unit tests (short mode, fast)
+#   integration    – full envtest suite (etcd + kube-apiserver); enforces 70% coverage
 
 name: CI
 
@@ -63,6 +59,48 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage
+          name: coverage-unit
           path: coverage.out
+          retention-days: 7
+
+  integration:
+    name: Integration tests (envtest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install envtest binaries
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+      - name: Run integration tests with coverage
+        run: |
+          KUBEBUILDER_ASSETS=$(setup-envtest use --bin-path /tmp/envtest-bins -p path)
+          export KUBEBUILDER_ASSETS
+          go test -race -coverprofile=coverage-integration.out ./...
+
+      - name: Check coverage threshold (70%)
+        run: |
+          total=$(go tool cover -func=coverage-integration.out | grep '^total:' | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          if awk "BEGIN {exit !($total < 70)}"; then
+            echo "ERROR: coverage ${total}% is below the 70% threshold"
+            exit 1
+          fi
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage-integration.out
           retention-days: 7

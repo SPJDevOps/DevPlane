@@ -92,10 +92,21 @@ type PersistenceConfig struct {
 	StorageClass string `json:"storageClass,omitempty"`
 }
 
+// WorkspacePhase is the lifecycle phase of a Workspace.
+type WorkspacePhase string
+
+const (
+	WorkspacePhasePending  WorkspacePhase = "Pending"
+	WorkspacePhaseCreating WorkspacePhase = "Creating"
+	WorkspacePhaseRunning  WorkspacePhase = "Running"
+	WorkspacePhaseFailed   WorkspacePhase = "Failed"
+	WorkspacePhaseStopped  WorkspacePhase = "Stopped"
+)
+
 // WorkspaceStatus defines the observed state of a Workspace.
 type WorkspaceStatus struct {
 	// Phase is the current lifecycle phase: Pending, Creating, Running, Failed, Stopped.
-	Phase string `json:"phase,omitempty"`
+	Phase WorkspacePhase `json:"phase,omitempty"`
 	// PodName is the name of the workspace pod when running.
 	PodName string `json:"podName,omitempty"`
 	// ServiceEndpoint is the internal service DNS name for the workspace.

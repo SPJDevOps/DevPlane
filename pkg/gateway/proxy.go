@@ -34,8 +34,10 @@ func NewProxy(log logr.Logger) *Proxy {
 }
 
 // ServeWS upgrades r to WebSocket and proxies traffic to backendURL.
+// onActivity is called on each forwarded frame so callers can update an
+// idle-timeout timestamp; pass nil to disable activity tracking.
 // It blocks until either side closes the connection.
-func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL string) error {
+func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL string, onActivity func()) error {
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return fmt.Errorf("upgrade client connection: %w", err)
@@ -56,8 +58,8 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	p.log.Info("WebSocket tunnel open", "backend", backendURL)
 
 	errc := make(chan error, 2)
-	go copyFrames(clientConn, backendConn, errc)
-	go copyFrames(backendConn, clientConn, errc)
+	go copyFrames(clientConn, backendConn, errc, onActivity)
+	go copyFrames(backendConn, clientConn, errc, onActivity)
 
 	err = <-errc
 	p.log.Info("WebSocket tunnel closed", "backend", backendURL, "reason", err)
@@ -71,8 +73,9 @@ func BackendURL(serviceEndpoint string) string {
 }
 
 // copyFrames reads WebSocket frames from src and writes them to dst.
+// onActivity is invoked after each successfully forwarded frame; may be nil.
 // On a normal close it propagates the close handshake to dst before returning.
-func copyFrames(dst, src *websocket.Conn, errc chan<- error) {
+func copyFrames(dst, src *websocket.Conn, errc chan<- error, onActivity func()) {
 	for {
 		msgType, data, err := src.ReadMessage()
 		if err != nil {
@@ -86,6 +89,9 @@ func copyFrames(dst, src *websocket.Conn, errc chan<- error) {
 		if err := dst.WriteMessage(msgType, data); err != nil {
 			errc <- err
 			return
+		}
+		if onActivity != nil {
+			onActivity()
 		}
 	}
 }

@@ -67,7 +67,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if err := workspace.ValidateSpec(&ws); err != nil {
 		log.Error(err, "Invalid Workspace spec")
-		if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", err.Error()); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -83,7 +83,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Handle stopped workspaces — do not reconcile further.
-	if ws.Status.Phase == "Stopped" {
+	if ws.Status.Phase == workspacev1alpha1.WorkspacePhaseStopped {
 		return ctrl.Result{}, nil
 	}
 
@@ -115,14 +115,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		pvcObj, buildErr := workspace.BuildPVC(&ws, r.Scheme)
 		if buildErr != nil {
 			log.Error(buildErr, "Failed to build PVC")
-			if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", buildErr.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", buildErr.Error()); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
 		}
 		if err := r.Create(ctx, pvcObj); err != nil {
 			log.Error(err, "Failed to create PVC")
-			if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", err.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
@@ -136,7 +136,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// proceed to pod creation and let Kubernetes resolve the binding.
 	if pvc.Status.Phase == corev1.ClaimLost {
 		msg := "PVC lost — manual intervention required"
-		if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", msg); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", msg); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -157,14 +157,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		podObj, buildErr := workspace.BuildPod(&ws, pvcName, image, r.Scheme)
 		if buildErr != nil {
 			log.Error(buildErr, "Failed to build Pod")
-			if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", buildErr.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", buildErr.Error()); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
 		}
 		if err := r.Create(ctx, podObj); err != nil {
 			log.Error(err, "Failed to create Pod")
-			if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", err.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
@@ -204,7 +204,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return controllerutil.SetControllerReference(&ws, svc, r.Scheme)
 	}); err != nil {
 		log.Error(err, "Failed to ensure Service")
-		if updateErr := r.updateStatus(ctx, &ws, "Failed", "", "", "", err.Error()); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -221,7 +221,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			if err := r.Delete(ctx, &pod); err != nil && !errors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("delete idle pod: %w", err)
 			}
-			if updateErr := r.updateStatus(ctx, &ws, "Stopped", "", "", "Workspace stopped due to inactivity", ""); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseStopped, "", "", "Workspace stopped due to inactivity", ""); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
@@ -230,7 +230,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Update status from pod state.
 	if pod.Status.Phase == corev1.PodRunning && isPodReady(&pod) {
-		if updateErr := r.updateStatus(ctx, &ws, "Running", podName, serviceEndpoint, "", ""); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseRunning, podName, serviceEndpoint, "", ""); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		// Requeue periodically so the idle-timeout check fires even without events.
@@ -243,7 +243,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check for pod failure conditions.
 	if pod.Status.Phase == corev1.PodFailed {
 		msg := fmt.Sprintf("Pod failed: %s", pod.Status.Reason)
-		if updateErr := r.updateStatus(ctx, &ws, "Failed", podName, "", "", msg); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -255,7 +255,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			reason := cs.State.Waiting.Reason
 			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "InvalidImageName" {
 				msg := fmt.Sprintf("Pod stuck: %s — %s", reason, cs.State.Waiting.Message)
-				if updateErr := r.updateStatus(ctx, &ws, "Failed", podName, "", "", msg); updateErr != nil {
+				if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
 					return ctrl.Result{}, updateErr
 				}
 				return ctrl.Result{}, nil
@@ -268,7 +268,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if pod.Status.Phase != "" {
 		msg = fmt.Sprintf("Pod phase: %s", pod.Status.Phase)
 	}
-	if updateErr := r.updateStatus(ctx, &ws, "Creating", podName, serviceEndpoint, msg, ""); updateErr != nil {
+	if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, podName, serviceEndpoint, msg, ""); updateErr != nil {
 		return ctrl.Result{}, updateErr
 	}
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -433,7 +433,7 @@ func (r *WorkspaceReconciler) ensureNetworkPolicies(ctx context.Context, ws *wor
 }
 
 // updateStatus sets the Workspace status and updates via the status subresource.
-func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1alpha1.Workspace, phase, podName, serviceEndpoint, message, messageOverride string) error {
+func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1alpha1.Workspace, phase workspacev1alpha1.WorkspacePhase, podName, serviceEndpoint, message, messageOverride string) error {
 	msg := message
 	if messageOverride != "" {
 		msg = messageOverride

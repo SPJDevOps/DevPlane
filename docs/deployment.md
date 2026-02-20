@@ -168,11 +168,22 @@ kubectl apply -f - <<EOF
 apiVersion: workspace.devplane.io/v1alpha1
 kind: Workspace
 metadata:
-  name: test-workspace
+  name: test-user
   namespace: workspaces
 spec:
-  userID: "test-user"
-  userEmail: "test@example.com"
+  user:
+    id: "test-user"
+    email: "test@example.com"
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+    storage: "20Gi"
+  aiConfig:
+    providers:
+      - name: local
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
 EOF
 
 # Watch the workspace progress through phases: Pending → Creating → Running

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
@@ -144,6 +145,15 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 					},
 					Ports: []corev1.ContainerPort{
 						{Name: "ttyd", ContainerPort: ttydPort, Protocol: corev1.ProtocolTCP},
+					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							TCPSocket: &corev1.TCPSocketAction{
+								Port: intstr.FromInt(ttydPort),
+							},
+						},
+						InitialDelaySeconds: 5,
+						PeriodSeconds:       5,
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{

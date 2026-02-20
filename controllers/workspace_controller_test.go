@@ -247,7 +247,7 @@ func TestReconcile_Integration(t *testing.T) {
 	if err := k8sClient.Get(ctx, nn, ws); err != nil {
 		t.Fatalf("Get Workspace: %v", err)
 	}
-	if ws.Status.Phase != "Running" {
+	if ws.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
 		t.Errorf("Workspace status phase = %q, want Running", ws.Status.Phase)
 	}
 	if ws.Status.PodName != "john-workspace-pod" {
@@ -317,7 +317,7 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}, ws); err != nil {
 		t.Fatalf("Get Workspace: %v", err)
 	}
-	if ws.Status.Phase != "Failed" {
+	if ws.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
 		t.Errorf("status.phase = %q, want Failed", ws.Status.Phase)
 	}
 	if ws.Status.Message == "" {

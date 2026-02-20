@@ -65,7 +65,7 @@ func TestEnsureWorkspace_CreatesNew(t *testing.T) {
 		t.Fatalf("Create workspace: %v", err)
 	}
 	// Set it to Running
-	ws.Status.Phase = "Running"
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
 	ws.Status.ServiceEndpoint = "user1-workspace-svc.default.svc.cluster.local"
 	if err := fc.Status().Update(ctx, ws); err != nil {
 		t.Fatalf("Update status: %v", err)
@@ -75,7 +75,7 @@ func TestEnsureWorkspace_CreatesNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureWorkspace: %v", err)
 	}
-	if result.Status.Phase != "Running" {
+	if result.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
 		t.Errorf("phase = %q, want Running", result.Status.Phase)
 	}
 }
@@ -107,7 +107,7 @@ func TestEnsureWorkspace_FailedWorkspace(t *testing.T) {
 	if err := fc.Create(ctx, ws); err != nil {
 		t.Fatalf("Create workspace: %v", err)
 	}
-	ws.Status.Phase = "Failed"
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseFailed
 	ws.Status.Message = "pod crash"
 	if err := fc.Status().Update(ctx, ws); err != nil {
 		t.Fatalf("Update status: %v", err)
@@ -154,7 +154,7 @@ func TestEnsureWorkspace_CreatesNewCR(t *testing.T) {
 	}
 
 	// Set it to Running to unblock
-	ws.Status.Phase = "Running"
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
 	ws.Status.ServiceEndpoint = "newuser-workspace-svc.default.svc.cluster.local"
 	if err := fc.Status().Update(ctx, ws); err != nil {
 		t.Fatalf("Update status: %v", err)
@@ -193,7 +193,7 @@ func TestLifecycleManager_GetExisting(t *testing.T) {
 	if err := fc.Create(ctx, ws); err != nil {
 		t.Fatal(err)
 	}
-	ws.Status.Phase = "Running"
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
 	ws.Status.PodName = "existing-workspace-pod"
 	ws.Status.ServiceEndpoint = "existing-workspace-svc.ns1.svc.cluster.local"
 	if err := fc.Status().Update(ctx, ws); err != nil {

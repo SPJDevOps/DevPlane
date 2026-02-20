@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,6 +26,22 @@ import (
 )
 
 var scheme = runtime.NewScheme()
+
+// tokenValidator verifies an OIDC bearer token and returns checked claims.
+type tokenValidator interface {
+	Validate(ctx context.Context, rawToken string) (*gw.Claims, error)
+}
+
+// workspaceLifecycle creates or retrieves the user's workspace and tracks activity.
+type workspaceLifecycle interface {
+	EnsureWorkspace(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, error)
+	TouchLastAccessed(ctx context.Context, ws *workspacev1alpha1.Workspace)
+}
+
+// wsProxy proxies a WebSocket connection to a backend URL.
+type wsProxy interface {
+	ServeWS(w http.ResponseWriter, r *http.Request, backendURL string, onActivity func()) error
+}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -92,9 +109,28 @@ func main() {
 		// No write timeout: WebSocket connections are long-lived.
 	}
 	log.Info("Gateway listening", "addr", srv.Addr, "namespace", namespace)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error(err, "Server failed")
-		os.Exit(1)
+
+	srvErr := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			srvErr <- err
+		}
+		close(srvErr)
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Info("Shutting down gateway server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Error(err, "Server shutdown error")
+		}
+	case err := <-srvErr:
+		if err != nil {
+			log.Error(err, "Server failed")
+			os.Exit(1)
+		}
 	}
 }
 
@@ -108,9 +144,9 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 // provisions or retrieves their Workspace CR, then proxies the connection to the
 // workspace pod's ttyd server.
 func handleWS(w http.ResponseWriter, r *http.Request,
-	validator *gw.Validator,
-	lifecycle *gw.LifecycleManager,
-	proxy *gw.Proxy,
+	validator tokenValidator,
+	lifecycle workspaceLifecycle,
+	proxy wsProxy,
 	namespace string,
 	log logr.Logger,
 ) {
@@ -138,7 +174,18 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	backendURL := gw.BackendURL(ws.Status.ServiceEndpoint)
 	log.Info("Proxying WebSocket", "user", claims.UserID, "backend", backendURL)
 
-	if err := proxy.ServeWS(w, r, backendURL); err != nil {
+	// Rate-limited activity callback: update LastAccessed at most once per minute
+	// so the idle-timeout controller sees genuine activity, not the initial timestamp.
+	var lastTouch time.Time
+	onActivity := func() {
+		if time.Since(lastTouch) < time.Minute {
+			return
+		}
+		lastTouch = time.Now()
+		lifecycle.TouchLastAccessed(r.Context(), ws)
+	}
+
+	if err := proxy.ServeWS(w, r, backendURL, onActivity); err != nil {
 		log.Info("WebSocket session ended", "user", claims.UserID, "reason", err.Error())
 	}
 }
