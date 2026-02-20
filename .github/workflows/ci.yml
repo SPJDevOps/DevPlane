@@ -84,7 +84,7 @@ jobs:
 
       - name: Run integration tests with coverage
         run: |
-          KUBEBUILDER_ASSETS=$(setup-envtest use --bin-path /tmp/envtest-bins -p path)
+          KUBEBUILDER_ASSETS=$(setup-envtest use --bin-dir /tmp/envtest-bins -p path)
           export KUBEBUILDER_ASSETS
           go test -race -coverprofile=coverage-integration.out ./...
 
