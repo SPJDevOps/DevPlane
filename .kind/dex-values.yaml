@@ -1,0 +1,32 @@
+# dex-values.yaml (updated)
+service:
+  type: NodePort
+  ports:
+    http:
+      nodePort: 32000
+
+config:
+  issuer: http://172.21.0.2:32000   # ← Docker bridge IP + NodePort
+
+  storage:
+    type: memory
+
+  oauth2:
+    skipApprovalScreen: true
+    responseTypes:
+      - code
+
+  staticClients:
+  - id: devplane
+    redirectURIs:
+    - 'http://localhost:9999/callback'   # for the CLI tool
+    name: DevPlane
+    secret: devplane-local-secret
+
+  staticPasswords:
+  - email: "dev@example.com"
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4u"
+    username: "devuser"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+
+  enablePasswordDB: true

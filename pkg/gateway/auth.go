@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,10 @@ import (
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 )
 
-const tokenCacheTTL = 5 * time.Minute
+const (
+	tokenCacheTTL  = 5 * time.Minute
+	tokenCacheMax  = 10_000 // maximum number of entries to prevent unbounded growth
+)
 
 // Claims holds verified identity extracted from an OIDC token.
 type Claims struct {
@@ -26,13 +30,17 @@ type Claims struct {
 }
 
 // Validator verifies OIDC bearer tokens and caches results for tokenCacheTTL.
+// The cache is bounded to tokenCacheMax entries using an LRU eviction policy so
+// that a large number of distinct users cannot cause unbounded memory growth.
 type Validator struct {
 	verifier *gooidc.IDTokenVerifier
 	mu       sync.Mutex
-	cache    map[string]cachedEntry
+	index    map[string]*list.Element // hash → LRU list element
+	lru      *list.List               // front = most recently used
 }
 
 type cachedEntry struct {
+	key    string // hash of the raw token
 	claims *Claims
 	expiry time.Time
 }
@@ -61,7 +69,8 @@ func NewValidator(ctx context.Context, issuerURL, clientID string) (*Validator, 
 	}
 	v := &Validator{
 		verifier: provider.Verifier(&gooidc.Config{ClientID: clientID}),
-		cache:    make(map[string]cachedEntry),
+		index:    make(map[string]*list.Element),
+		lru:      list.New(),
 	}
 	go v.evictExpired(ctx)
 	return v, nil
@@ -78,9 +87,10 @@ func (v *Validator) evictExpired(ctx context.Context) {
 		case <-ticker.C:
 			now := time.Now()
 			v.mu.Lock()
-			for key, entry := range v.cache {
-				if now.After(entry.expiry) {
-					delete(v.cache, key)
+			for key, elem := range v.index {
+				if now.After(elem.Value.(*cachedEntry).expiry) {
+					v.lru.Remove(elem)
+					delete(v.index, key)
 				}
 			}
 			v.mu.Unlock()
@@ -94,9 +104,17 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 	key := hashToken(rawToken)
 
 	v.mu.Lock()
-	if entry, ok := v.cache[key]; ok && time.Now().Before(entry.expiry) {
-		v.mu.Unlock()
-		return entry.claims, nil
+	if elem, ok := v.index[key]; ok {
+		entry := elem.Value.(*cachedEntry)
+		if time.Now().Before(entry.expiry) {
+			v.lru.MoveToFront(elem)
+			claims := entry.claims
+			v.mu.Unlock()
+			return claims, nil
+		}
+		// Expired entry — evict eagerly rather than waiting for the background ticker.
+		v.lru.Remove(elem)
+		delete(v.index, key)
 	}
 	v.mu.Unlock()
 
@@ -119,7 +137,18 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 	}
 
 	v.mu.Lock()
-	v.cache[key] = cachedEntry{claims: claims, expiry: time.Now().Add(tokenCacheTTL)}
+	// Evict the LRU entry if we have reached the capacity limit.
+	for v.lru.Len() >= tokenCacheMax {
+		oldest := v.lru.Back()
+		if oldest == nil {
+			break
+		}
+		v.lru.Remove(oldest)
+		delete(v.index, oldest.Value.(*cachedEntry).key)
+	}
+	entry := &cachedEntry{key: key, claims: claims, expiry: time.Now().Add(tokenCacheTTL)}
+	elem := v.lru.PushFront(entry)
+	v.index[key] = elem
 	v.mu.Unlock()
 
 	return claims, nil

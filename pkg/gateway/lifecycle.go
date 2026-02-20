@@ -43,6 +43,7 @@ func NewLifecycleManager(c client.Client, log logr.Logger, cfg LifecycleConfig) 
 
 // EnsureWorkspace gets or creates a Workspace CR for claims.UserID in namespace,
 // then waits up to workspaceReadyTimeout for it to reach the Running phase.
+// It also stamps LastAccessed so the idle-timeout controller can track activity.
 func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, error) {
 	key := types.NamespacedName{Name: claims.UserID, Namespace: namespace}
 
@@ -80,10 +81,25 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 		}
 	}
 
-	return m.waitForRunning(ctx, key)
+	ws, err = m.waitForRunning(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Stamp LastAccessed so the idle-timeout controller can track inactivity.
+	// This is best-effort; a failure here does not prevent the user from connecting.
+	patchBase := ws.DeepCopy()
+	ws.Status.LastAccessed = metav1.Now()
+	if patchErr := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); patchErr != nil {
+		m.log.Error(patchErr, "Failed to update LastAccessed", "workspace", ws.Name)
+	}
+
+	return ws, nil
 }
 
 // waitForRunning polls until the Workspace reaches Running or the deadline passes.
+// It also handles the Stopped phase by returning an error immediately rather than
+// waiting out the full timeout.
 func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.NamespacedName) (*workspacev1alpha1.Workspace, error) {
 	deadline := time.Now().Add(workspaceReadyTimeout)
 	for time.Now().Before(deadline) {
@@ -96,6 +112,8 @@ func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.Namespa
 			return ws, nil
 		case "Failed":
 			return nil, fmt.Errorf("workspace %q failed: %s", key.Name, ws.Status.Message)
+		case "Stopped":
+			return nil, fmt.Errorf("workspace %q is stopped", key.Name)
 		}
 		m.log.Info("Waiting for workspace", "workspace", key.Name, "phase", ws.Status.Phase)
 		select {

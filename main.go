@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -93,12 +94,27 @@ func main() {
 		}
 	}
 
+	// IDLE_TIMEOUT is an optional Go duration string (e.g. "24h", "8h30m") that
+	// controls how long a Running workspace may be idle before its pod is stopped.
+	// Zero or unset disables idle shutdown.
+	var idleTimeout time.Duration
+	if raw := os.Getenv("IDLE_TIMEOUT"); raw != "" {
+		d, parseErr := time.ParseDuration(raw)
+		if parseErr != nil {
+			setupLog.Info("Ignoring invalid IDLE_TIMEOUT", "value", raw, "error", parseErr)
+		} else {
+			idleTimeout = d
+			setupLog.Info("Idle timeout configured", "idleTimeout", idleTimeout)
+		}
+	}
+
 	if err = (&controllers.WorkspaceReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
 		WorkspaceImage: workspaceImage,
 		LLMNamespaces:  llmNamespaces,
 		EgressPorts:    egressPorts,
+		IdleTimeout:    idleTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller", "controller", "Workspace")
 		os.Exit(1)

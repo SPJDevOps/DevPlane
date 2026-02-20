@@ -60,6 +60,10 @@ test: fmt vet setup-envtest ## Run all tests (downloads envtest binaries on firs
 test-short: fmt vet ## Run tests excluding envtest integration tests (no etcd/kube-apiserver needed).
 	go test -short ./... -coverprofile=cover.out
 
+.PHONY: test-e2e
+test-e2e: fmt vet ## Run E2E tests against the current kubeconfig cluster (operator must be running).
+	go test -v -tags e2e ./test/e2e/... -timeout 10m
+
 .PHONY: build
 build: fmt vet
 	go build -o bin/manager main.go

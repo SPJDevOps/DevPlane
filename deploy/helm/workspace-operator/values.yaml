@@ -59,9 +59,26 @@ workspace:
   ai:
     endpoint: "http://vllm.ai-system.svc:8000"
     model: "deepseek-coder-33b-instruct"
-    egressNamespaces: "ai-system"
-    # egressPorts is a comma-separated list of TCP ports workspace pods are allowed
-    # to reach on external IPs (0.0.0.0/0).  Covers git-over-SSH (22), HTTP/HTTPS
-    # (80/443), Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081),
-    # and Ollama (11434).  Override to restrict or expand as needed.
-    egressPorts: "22,80,443,5000,8000,8080,8081,11434"
+    # egressNamespaces is the list of Kubernetes namespaces where LLM services run.
+    # Workspace pods are allowed to reach all pods in these namespaces (any port).
+    # The operator joins this list into a comma-separated LLM_NAMESPACES env var.
+    egressNamespaces:
+      - ai-system
+    # egressPorts is the list of TCP ports workspace pods are allowed to reach on
+    # external IPs (0.0.0.0/0).  Covers git-over-SSH (22), HTTP/HTTPS (80/443),
+    # Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081), and
+    # Ollama (11434).  Override to restrict or expand as needed.
+    # The operator joins this list into a comma-separated EGRESS_PORTS env var.
+    egressPorts:
+      - 22
+      - 80
+      - 443
+      - 5000
+      - 8000
+      - 8080
+      - 8081
+      - 11434
+  # idleTimeout controls how long a Running workspace may be inactive before its
+  # pod is automatically stopped.  Uses Go duration syntax (e.g. "24h", "8h30m").
+  # Leave empty to disable idle shutdown.
+  idleTimeout: "24h"

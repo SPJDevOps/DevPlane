@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,7 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const ttydPort = 7681
+const (
+	ttydPort           = 7681
+	backendDialTimeout = 30 * time.Second
+)
 
 var upgrader = websocket.Upgrader{
 	HandshakeTimeout: 10 * time.Second,
@@ -38,7 +42,12 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	}
 	defer clientConn.Close()
 
-	backendConn, _, err := websocket.DefaultDialer.DialContext(r.Context(), backendURL, nil)
+	// Use a separate context with a hard deadline for dialing the backend so that
+	// a slow or unresponsive pod does not hold the goroutine open indefinitely.
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), backendDialTimeout)
+	defer dialCancel()
+
+	backendConn, _, err := websocket.DefaultDialer.DialContext(dialCtx, backendURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial backend %q: %w", backendURL, err)
 	}

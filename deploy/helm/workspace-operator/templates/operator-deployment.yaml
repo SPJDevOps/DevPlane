@@ -34,9 +34,13 @@ spec:
         - name: WORKSPACE_IMAGE
           value: "{{ .Values.workspace.image.repository }}:{{ .Values.workspace.image.tag }}"
         - name: LLM_NAMESPACES
-          value: {{ .Values.workspace.ai.egressNamespaces | quote }}
+          value: {{ .Values.workspace.ai.egressNamespaces | join "," | quote }}
         - name: EGRESS_PORTS
-          value: {{ .Values.workspace.ai.egressPorts | quote }}
+          value: {{ .Values.workspace.ai.egressPorts | join "," | quote }}
+        {{- if .Values.workspace.idleTimeout }}
+        - name: IDLE_TIMEOUT
+          value: {{ .Values.workspace.idleTimeout | quote }}
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

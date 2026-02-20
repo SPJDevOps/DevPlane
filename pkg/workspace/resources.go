@@ -4,6 +4,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -13,6 +14,10 @@ import (
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
 )
+
+// dnsLabelRegex matches a valid Kubernetes DNS label: lowercase alphanumeric,
+// may contain hyphens, must start and end with alphanumeric, max 63 chars.
+var dnsLabelRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`)
 
 const (
 	labelApp       = "workspace"
@@ -50,6 +55,12 @@ func Labels(userID string) map[string]string {
 func BuildPVC(workspace *workspacev1alpha1.Workspace, scheme *runtime.Scheme) (*corev1.PersistentVolumeClaim, error) {
 	userID := workspace.Spec.User.ID
 	name := PVCName(userID)
+
+	storageQty, err := resource.ParseQuantity(workspace.Spec.Resources.Storage)
+	if err != nil {
+		return nil, fmt.Errorf("parse storage quantity %q: %w", workspace.Spec.Resources.Storage, err)
+	}
+
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -60,7 +71,7 @@ func BuildPVC(workspace *workspacev1alpha1.Workspace, scheme *runtime.Scheme) (*
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(workspace.Spec.Resources.Storage),
+					corev1.ResourceStorage: storageQty,
 				},
 			},
 		},
@@ -85,8 +96,14 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 	name := PodName(userID)
 	labels := Labels(userID)
 
-	cpuQty := resource.MustParse(workspace.Spec.Resources.CPU)
-	memQty := resource.MustParse(workspace.Spec.Resources.Memory)
+	cpuQty, err := resource.ParseQuantity(workspace.Spec.Resources.CPU)
+	if err != nil {
+		return nil, fmt.Errorf("parse CPU quantity %q: %w", workspace.Spec.Resources.CPU, err)
+	}
+	memQty, err := resource.ParseQuantity(workspace.Spec.Resources.Memory)
+	if err != nil {
+		return nil, fmt.Errorf("parse memory quantity %q: %w", workspace.Spec.Resources.Memory, err)
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -219,6 +236,7 @@ func BuildHeadlessService(workspace *workspacev1alpha1.Workspace, scheme *runtim
 }
 
 // ValidateSpec returns an error if the workspace spec is invalid.
+// It validates required fields, user ID DNS-label format, and resource quantity syntax.
 func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	if workspace == nil {
 		return errors.New("workspace is nil")
@@ -226,6 +244,13 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	s := &workspace.Spec
 	if s.User.ID == "" {
 		return errors.New("spec.user.id is required")
+	}
+	if len(s.User.ID) > 63 {
+		return fmt.Errorf("spec.user.id must be 63 characters or fewer (got %d)", len(s.User.ID))
+	}
+	// User ID is used as a prefix in Kubernetes resource names (DNS label format).
+	if !dnsLabelRegex.MatchString(s.User.ID) {
+		return errors.New("spec.user.id must be a valid DNS label: lowercase alphanumeric and hyphens only, must start and end with alphanumeric")
 	}
 	if s.User.Email == "" {
 		return errors.New("spec.user.email is required")
@@ -238,6 +263,17 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	}
 	if s.Resources.Memory == "" {
 		return errors.New("spec.resources.memory is required")
+	}
+	// Validate resource quantities eagerly to surface parse errors before
+	// resource.MustParse panics in builder functions.
+	if _, err := resource.ParseQuantity(s.Resources.CPU); err != nil {
+		return fmt.Errorf("spec.resources.cpu invalid: %w", err)
+	}
+	if _, err := resource.ParseQuantity(s.Resources.Memory); err != nil {
+		return fmt.Errorf("spec.resources.memory invalid: %w", err)
+	}
+	if _, err := resource.ParseQuantity(s.Resources.Storage); err != nil {
+		return fmt.Errorf("spec.resources.storage invalid: %w", err)
 	}
 	if s.AIConfig.Endpoint == "" {
 		return errors.New("spec.aiConfig.endpoint is required")

@@ -4,6 +4,11 @@
 # All user data written here persists across pod restarts.
 set -euo pipefail
 
+# ── Required environment variables ───────────────────────────────────────────
+# Fail fast with a clear message if the operator failed to inject these.
+: "${OPENAI_BASE_URL:?OPENAI_BASE_URL must be set by the operator (spec.aiConfig.endpoint)}"
+: "${MODEL_NAME:?MODEL_NAME must be set by the operator (spec.aiConfig.model)}"
+
 # ── SSH / kube / gitconfig permissions ───────────────────────────────────────
 # The PVC does not guarantee Unix permissions are preserved, so fix them on
 # every start. SSH will silently ignore keys with wrong permissions.
