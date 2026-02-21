@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Workspace Operator Authors.
+Copyright 2026 Steven Petit-Jean.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
