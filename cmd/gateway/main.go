@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -39,6 +40,9 @@ type tokenValidator interface {
 
 // workspaceLifecycle creates or retrieves the user's workspace and tracks activity.
 type workspaceLifecycle interface {
+	// EnsureExists gets or creates the Workspace CR and returns immediately.
+	EnsureExists(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, error)
+	// EnsureWorkspace gets or creates the Workspace CR and blocks until Running.
 	EnsureWorkspace(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, error)
 	TouchLastAccessed(ctx context.Context, ws *workspacev1alpha1.Workspace)
 }
@@ -171,6 +175,52 @@ func main() {
 	}
 }
 
+const loadingPageTmpl = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="3">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevPlane – Workspace Starting</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 100vh;
+      background: #0d1117; color: #e6edf3;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .spinner {
+      width: 56px; height: 56px;
+      border: 5px solid #30363d; border-top-color: #58a6ff;
+      border-radius: 50%; animation: spin 0.9s linear infinite;
+      margin-bottom: 2rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; }
+    p  { font-size: 0.875rem; color: #8b949e; }
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <h1>Hello {{.DisplayName}}, your workspace is spawning&hellip;</h1>
+  <p>Phase: {{.Phase}}</p>
+</body>
+</html>`
+
+var loadingTmpl = template.Must(template.New("loading").Parse(loadingPageTmpl))
+
+type loadingPageData struct {
+	DisplayName string
+	Phase       string
+}
+
+func serveLoadingPage(w http.ResponseWriter, _ *http.Request, displayName, phase string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = loadingTmpl.Execute(w, loadingPageData{DisplayName: displayName, Phase: phase})
+}
+
 // handleHealth responds to liveness and readiness probes.
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
@@ -257,7 +307,8 @@ func handleCallback(w http.ResponseWriter, r *http.Request,
 
 // handleProxy is the catch-all handler that proxies authenticated HTTP
 // requests (e.g. the ttyd web UI) to the user's workspace pod.
-// Unauthenticated requests are redirected to /login.
+// Unauthenticated requests are redirected to /login. While the workspace is
+// provisioning, a friendly loading page is served that auto-refreshes every 3 s.
 func handleProxy(w http.ResponseWriter, r *http.Request,
 	validator tokenValidator, lifecycle workspaceLifecycle,
 	namespace string, secure bool, log logr.Logger,
@@ -283,15 +334,30 @@ func handleProxy(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	ws, err := lifecycle.EnsureWorkspace(r.Context(), namespace, claims)
+	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
 	if err != nil {
 		http.Error(w, "Failed to provision workspace", http.StatusInternalServerError)
-		log.Error(err, "EnsureWorkspace failed", "user", claims.UserID)
+		log.Error(err, "EnsureExists failed", "user", claims.UserID)
+		return
+	}
+
+	displayName := claims.Email
+	if displayName == "" {
+		displayName = claims.UserID
+	}
+
+	if ws.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning || ws.Status.ServiceEndpoint == "" {
+		serveLoadingPage(w, r, displayName, string(ws.Status.Phase))
 		return
 	}
 
 	target, _ := url.Parse(gw.BackendHTTPURL(ws.Status.ServiceEndpoint))
 	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Info("Backend not reachable, serving loading page",
+			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint, "error", err.Error())
+		serveLoadingPage(w, r, displayName, string(ws.Status.Phase))
+	}
 	rp.ServeHTTP(w, r)
 }
 

@@ -26,8 +26,14 @@ func (v *stubValidator) Validate(_ context.Context, _ string) (*gw.Claims, error
 }
 
 type stubLifecycle struct {
-	ws  *workspacev1alpha1.Workspace
-	err error
+	ws        *workspacev1alpha1.Workspace
+	err       error
+	existsWs  *workspacev1alpha1.Workspace
+	existsErr error
+}
+
+func (l *stubLifecycle) EnsureExists(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, error) {
+	return l.existsWs, l.existsErr
 }
 
 func (l *stubLifecycle) EnsureWorkspace(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, error) {
@@ -452,5 +458,168 @@ func TestHandleProxy_InvalidToken_RedirectsToLogin(t *testing.T) {
 		if c.Name == "devplane_token" && c.MaxAge != -1 {
 			t.Errorf("stale devplane_token cookie MaxAge = %d, want -1 (cleared)", c.MaxAge)
 		}
+	}
+}
+
+func proxyRequest(token string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "devplane_token", Value: token})
+	return r
+}
+
+func validClaims() *gw.Claims {
+	return &gw.Claims{Sub: "alice", Email: "alice@example.com", UserID: "alice"}
+}
+
+func TestHandleProxy_EnsureExistsFails(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	lc := &stubLifecycle{existsErr: errors.New("k8s unavailable")}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+}
+
+func TestHandleProxy_PendingPhase_ServesLoadingPage(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("loading page missing meta-refresh")
+	}
+	if !strings.Contains(body, "alice@example.com") {
+		t.Error("loading page missing user email")
+	}
+	if !strings.Contains(body, "Pending") {
+		t.Error("loading page missing phase Pending")
+	}
+}
+
+func TestHandleProxy_CreatingPhase_ServesLoadingPage(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseCreating
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Creating") {
+		t.Error("loading page missing phase Creating")
+	}
+}
+
+func TestHandleProxy_RunningNoEndpoint_ServesLoadingPage(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+	ws.Status.ServiceEndpoint = "" // endpoint not yet set
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `http-equiv="refresh"`) {
+		t.Error("loading page missing meta-refresh")
+	}
+}
+
+func TestHandleProxy_FreshWorkspace_ServesLoadingPage(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{} // phase == "" (brand new CR)
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `http-equiv="refresh"`) {
+		t.Error("loading page missing meta-refresh")
+	}
+}
+
+func TestHandleProxy_RunningWithEndpoint_ErrorHandlerServesLoadingPage(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+	// ServiceEndpoint is a bare hostname; BackendHTTPURL appends :7681.
+	// 127.0.0.1 → http://127.0.0.1:7681 — connection refused immediately (no ttyd in tests).
+	ws.Status.ServiceEndpoint = "127.0.0.1"
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (ErrorHandler should serve loading page)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `http-equiv="refresh"`) {
+		t.Error("loading page missing meta-refresh")
+	}
+}
+
+func TestHandleProxy_EmailFallsBackToUserID(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	claims := &gw.Claims{Sub: "bob", Email: "", UserID: "bob"}
+	v := &stubValidator{claims: claims}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
+	lc := &stubLifecycle{existsWs: ws}
+	handleProxy(w, proxyRequest("tok"), v, lc, "default", false, discardLog())
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "bob") {
+		t.Error("loading page should contain UserID when email is empty")
+	}
+}
+
+func TestServeLoadingPage_HTMLEscapesDisplayName(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	serveLoadingPage(w, r, "<script>alert(1)</script>", "Pending")
+
+	body := w.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Error("XSS: raw <script> tag found in loading page output")
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Error("expected HTML-escaped &lt;script&gt; in output")
+	}
+}
+
+func TestServeLoadingPage_Status200(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	serveLoadingPage(w, r, "alice", "Creating")
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
 	}
 }

@@ -95,6 +95,63 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 	return ws, nil
 }
 
+// EnsureExists gets or creates the Workspace CR for claims.UserID in namespace
+// and returns it immediately without waiting for it to reach Running.
+// If the workspace is Stopped it patches the phase to "" to re-trigger operator
+// reconciliation, then returns the patched workspace.
+// Callers must inspect ws.Status.Phase and ws.Status.ServiceEndpoint.
+func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, error) {
+	key := types.NamespacedName{Name: claims.UserID, Namespace: namespace}
+
+	ws := &workspacev1alpha1.Workspace{}
+	err := m.client.Get(ctx, key, ws)
+	if err != nil && !errors.IsNotFound(err) {
+		return nil, fmt.Errorf("get workspace %q: %w", claims.UserID, err)
+	}
+
+	if errors.IsNotFound(err) {
+		ws = &workspacev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      claims.UserID,
+				Namespace: namespace,
+			},
+			Spec: workspacev1alpha1.WorkspaceSpec{
+				User: workspacev1alpha1.UserInfo{
+					ID:    claims.UserID,
+					Email: claims.Email,
+				},
+				Resources: workspacev1alpha1.ResourceRequirements{
+					CPU:     m.cfg.DefaultCPU,
+					Memory:  m.cfg.DefaultMemory,
+					Storage: m.cfg.DefaultStorage,
+				},
+				AIConfig: workspacev1alpha1.AIConfiguration{
+					Providers: m.cfg.Providers,
+				},
+			},
+		}
+		m.log.Info("Creating Workspace CR", "user", claims.UserID, "namespace", namespace)
+		if err := m.client.Create(ctx, ws); err != nil {
+			return nil, fmt.Errorf("create workspace %q: %w", claims.UserID, err)
+		}
+		return ws, nil
+	}
+
+	// If Stopped, clear the phase so the operator reconcile loop recreates the pod.
+	if ws.Status.Phase == workspacev1alpha1.WorkspacePhaseStopped {
+		m.log.Info("Restarting stopped workspace", "workspace", key.Name)
+		patchBase := ws.DeepCopy()
+		ws.Status.Phase = ""
+		ws.Status.Message = ""
+		ws.Status.PodName = ""
+		if patchErr := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); patchErr != nil {
+			return nil, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
+		}
+	}
+
+	return ws, nil
+}
+
 // waitForRunning polls until the Workspace reaches Running or the deadline passes.
 // When the workspace is Stopped it patches the status to clear the phase, allowing
 // the operator to recreate the pod, then continues polling.
