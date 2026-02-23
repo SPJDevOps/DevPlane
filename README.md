@@ -50,10 +50,14 @@ https://spjdevops.github.io/DevPlane
      --create-namespace \
      --set gateway.oidc.issuerURL=https://idp.example.com \
      --set gateway.oidc.clientID=devplane \
+     --set gateway.oidc.clientSecret=<your-client-secret> \
+     --set gateway.oidc.redirectURL=https://devplane.example.com/callback \
      --set 'workspace.ai.providers[0].name=local' \
      --set 'workspace.ai.providers[0].endpoint=http://vllm.ai-system.svc:8000' \
      --set 'workspace.ai.providers[0].models[0]=deepseek-coder-33b-instruct'
    ```
+
+   > **Naming note:** AI providers are configured with `workspace.ai.*` in Helm values and `spec.aiConfig.*` in Workspace CR manifests. These are the same data — the Helm chart translates between them automatically. See [AI Provider Configuration](./docs/deployment.md#ai-provider-configuration-helm-vs-workspace-cr) for details.
 
 2. **Create a sample Workspace** (after the operator is running):
 
@@ -61,7 +65,7 @@ https://spjdevops.github.io/DevPlane
    kubectl apply -f config/samples/workspace_v1alpha1_workspace.yaml
    ```
 
-3. **Configure Gateway** with your OIDC issuer, client ID, and client secret, and point users at the Gateway URL (e.g. `https://devplane.company.com`). The Gateway will create or look up a Workspace per user and proxy the terminal WebSocket to the workspace pod.
+3. **Access the terminal**: Navigate to the Gateway URL (e.g. `https://devplane.example.com`). You will be redirected to your identity provider to log in. After authenticating, the gateway provisions your workspace and proxies the ttyd terminal directly in the browser — no separate token needed.
 
 4. **Run the operator locally** against your current kubeconfig instead of deploying:
 

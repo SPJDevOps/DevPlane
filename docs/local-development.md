@@ -100,7 +100,7 @@ There is no hot-reload; you must rebuild and re-run. The named volume preserves 
 
 This section walks through running the operator, gateway, and a workspace pod inside a local Kubernetes cluster.
 
-> **Note:** The gateway is a work-in-progress placeholder. The OIDC login flow is not yet functional. Step 2.6 uses `kubectl port-forward` to bypass the gateway and test the operator + workspace pod directly.
+> **Note:** Step 2.6 uses `kubectl port-forward` to bypass the gateway and test the operator + workspace pod directly. For the full gateway login flow (browser → Keycloak → terminal), set `gateway.oidc.clientSecret` and `gateway.oidc.redirectURL` as well — see the [AI Provider Configuration and OIDC setup](../docs/deployment.md#oidc-configuration) section in the deployment guide.
 
 ### 2.1 Create the cluster
 
@@ -169,6 +169,8 @@ helm install workspace-operator deploy/helm/workspace-operator \
   --set workspace.image.pullPolicy=Never \
   --set gateway.oidc.issuerURL=http://172.21.0.2:32000 \
   --set gateway.oidc.clientID=devplane \
+  --set gateway.oidc.clientSecret=devsecret \
+  --set gateway.oidc.redirectURL=http://localhost:8080/callback \
   --set 'workspace.ai.providers[0].name=local' \
   --set 'workspace.ai.providers[0].endpoint=http://host.docker.internal:11434' \
   --set 'workspace.ai.providers[0].models[0]=llama3'

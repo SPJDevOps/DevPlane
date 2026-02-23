@@ -181,14 +181,23 @@ workspace:
 
 ### 3. OIDC configuration
 
-The gateway reads OIDC credentials from a Kubernetes Secret. The chart creates the Secret automatically when `gateway.oidc.issuerURL` and `gateway.oidc.clientID` are set.
+The gateway reads OIDC credentials from a Kubernetes Secret. The chart creates the Secret automatically from four values:
+
+| Value | Description |
+|-------|-------------|
+| `gateway.oidc.issuerURL` | OIDC issuer URL (e.g. `https://keycloak.example.com/realms/devplane`) |
+| `gateway.oidc.clientID` | OAuth2 client ID registered with the IdP |
+| `gateway.oidc.clientSecret` | OAuth2 client secret for the authorization code flow |
+| `gateway.oidc.redirectURL` | Full callback URL, e.g. `https://devplane.example.com/callback` — **must be registered with the IdP** |
+
+`cookieSecure` is derived automatically: if `redirectURL` starts with `https://`, session cookies are set with `Secure=true`. HTTP URLs (local dev) work without any extra flag.
 
 To use a pre-existing Secret (e.g. managed by an external secrets operator):
 
 ```yaml
 gateway:
   oidc:
-    existingSecret: "my-oidc-secret"  # must have keys: issuer-url, client-id
+    existingSecret: "my-oidc-secret"  # must have keys: issuer-url, client-id, client-secret, redirect-url
 ```
 
 Create it manually:
@@ -197,7 +206,9 @@ Create it manually:
 kubectl create secret generic my-oidc-secret \
   -n workspace-operator-system \
   --from-literal=issuer-url=https://idp.example.com \
-  --from-literal=client-id=devplane
+  --from-literal=client-id=devplane \
+  --from-literal=client-secret=<your-client-secret> \
+  --from-literal=redirect-url=https://devplane.example.com/callback
 ```
 
 ### 4. Verify the deployment
@@ -372,6 +383,27 @@ kubectl create configmap devplane-ca-bundle \
 
 ---
 
+## AI Provider Configuration: Helm vs. Workspace CR
+
+DevPlane uses the same AI provider data in two places with **different key names** depending on context:
+
+| Context | Key prefix | Example |
+|---------|------------|---------|
+| Helm values | `workspace.ai.*` | `workspace.ai.providers`, `workspace.ai.egressNamespaces` |
+| Workspace CR | `spec.aiConfig.*` | `spec.aiConfig.providers`, `spec.aiConfig.egressNamespaces` |
+
+These are the **same data** — the Helm chart translates between them automatically:
+
+1. `workspace.ai.providers` in `values.yaml` → serialised to `AI_PROVIDERS_JSON` env var on the gateway pod.
+2. When a user logs in, the gateway calls `EnsureWorkspace`, which writes `spec.aiConfig.providers` on the resulting Workspace CR using the providers from `AI_PROVIDERS_JSON`.
+3. The operator reads `spec.aiConfig.*` and injects `AI_PROVIDERS_JSON` into the workspace pod, which opencode uses to generate its configuration.
+
+**Common mistake:** setting `workspace.ai.providers` in Helm but then trying to override `workspace.ai.providers` in a Workspace CR manifest as `workspace.ai.providers` (or vice-versa). If you are editing a Workspace CR directly, use `spec.aiConfig.providers`. If you are configuring the Helm chart (or checking defaults), use `workspace.ai.providers`.
+
+Similarly, `workspace.ai.egressNamespaces` and `workspace.ai.egressPorts` in `values.yaml` map to `spec.aiConfig.egressNamespaces` and `spec.aiConfig.egressPorts` on the CR.
+
+---
+
 ## Helm Values Reference
 
 | Key | Type | Default | Description |
@@ -391,7 +423,9 @@ kubectl create configmap devplane-ca-bundle \
 | `gateway.createWorkspaceNamespace` | bool | `true` | Create the workspace namespace during install |
 | `gateway.oidc.issuerURL` | string | `""` | OIDC issuer URL |
 | `gateway.oidc.clientID` | string | `""` | OIDC client ID |
-| `gateway.oidc.existingSecret` | string | `""` | Use a pre-existing Secret for OIDC credentials |
+| `gateway.oidc.clientSecret` | string | `""` | OIDC client secret for authorization code flow |
+| `gateway.oidc.redirectURL` | string | `""` | Full callback URL (must be registered with IdP), e.g. `https://devplane.example.com/callback` |
+| `gateway.oidc.existingSecret` | string | `""` | Use a pre-existing Secret for OIDC credentials (keys: `issuer-url`, `client-id`, `client-secret`, `redirect-url`) |
 | `gateway.resources` | object | see values.yaml | CPU/memory requests and limits |
 | `gateway.ingress.enabled` | bool | `false` | Create an Ingress for the gateway |
 | `gateway.ingress.className` | string | `""` | IngressClass name |

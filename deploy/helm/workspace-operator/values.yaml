@@ -35,8 +35,10 @@ gateway:
   oidc:
     issuerURL: ""
     clientID: ""
-    # Name of an existing Secret with keys issuer-url and client-id.
-    # If set, oidc.issuerURL and oidc.clientID are ignored.
+    clientSecret: ""   # OIDC client secret for authorization code flow
+    redirectURL: ""    # Full callback URL, e.g. https://devplane.example.com/callback
+    # Name of an existing Secret with keys: issuer-url, client-id, client-secret, redirect-url.
+    # If set, oidc.issuerURL / clientID / clientSecret / redirectURL are ignored.
     existingSecret: ""
   tls:
     customCABundle:

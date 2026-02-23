@@ -72,6 +72,12 @@ func BackendURL(serviceEndpoint string) string {
 	return u.String()
 }
 
+// BackendHTTPURL builds the HTTP URL for a workspace pod's ttyd service.
+func BackendHTTPURL(serviceEndpoint string) string {
+	u := url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", serviceEndpoint, ttydPort)}
+	return u.String()
+}
+
 // copyFrames reads WebSocket frames from src and writes them to dst.
 // onActivity is invoked after each successfully forwarded frame; may be nil.
 // On a normal close it propagates the close handshake to dst before returning.
