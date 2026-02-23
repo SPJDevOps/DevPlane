@@ -345,3 +345,165 @@ func TestLifecycleManager_GetExisting(t *testing.T) {
 		t.Errorf("expected 1 workspace, got %d", len(list.Items))
 	}
 }
+
+// --- EnsureExists tests ---
+
+func TestEnsureExists_CreatesNewCR(t *testing.T) {
+	ctx := context.Background()
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "newex", Email: "newex@test.com", UserID: "newex"}
+
+	ws, err := lm.EnsureExists(ctx, "default", claims)
+	if err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+	if ws == nil {
+		t.Fatal("EnsureExists returned nil workspace")
+	}
+	if ws.Spec.User.ID != "newex" {
+		t.Errorf("user.id = %q, want newex", ws.Spec.User.ID)
+	}
+	if ws.Spec.Resources.CPU != "1" {
+		t.Errorf("resources.cpu = %q, want 1", ws.Spec.Resources.CPU)
+	}
+	// Brand-new CR has no phase set.
+	if ws.Status.Phase != "" {
+		t.Errorf("phase = %q, want empty for new CR", ws.Status.Phase)
+	}
+}
+
+func TestEnsureExists_ExistingRunningReturnsImmediately(t *testing.T) {
+	ctx := context.Background()
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "runex", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "runex", Email: "run@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(ctx, ws); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+	ws.Status.ServiceEndpoint = "runex-workspace-svc.default.svc.cluster.local"
+	if err := fc.Status().Update(ctx, ws); err != nil {
+		t.Fatalf("Update status: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "runex", Email: "run@test.com", UserID: "runex"}
+
+	result, err := lm.EnsureExists(ctx, "default", claims)
+	if err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+	if result.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
+		t.Errorf("phase = %q, want Running", result.Status.Phase)
+	}
+	if result.Status.ServiceEndpoint == "" {
+		t.Error("ServiceEndpoint should be set for Running workspace")
+	}
+}
+
+func TestEnsureExists_StoppedResetsPhase(t *testing.T) {
+	ctx := context.Background()
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "stopex", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "stopex", Email: "stop@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(ctx, ws); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseStopped
+	ws.Status.PodName = "old-pod"
+	ws.Status.Message = "idle timeout"
+	if err := fc.Status().Update(ctx, ws); err != nil {
+		t.Fatalf("Update status: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "stopex", Email: "stop@test.com", UserID: "stopex"}
+
+	result, err := lm.EnsureExists(ctx, "default", claims)
+	if err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+	// Phase, PodName, and Message should be cleared to re-trigger reconciliation.
+	if result.Status.Phase != "" {
+		t.Errorf("phase = %q, want empty after Stopped recovery", result.Status.Phase)
+	}
+	if result.Status.PodName != "" {
+		t.Errorf("podName = %q, want empty after Stopped recovery", result.Status.PodName)
+	}
+	if result.Status.Message != "" {
+		t.Errorf("message = %q, want empty after Stopped recovery", result.Status.Message)
+	}
+}
+
+func TestEnsureExists_PendingReturnsWithoutBlocking(t *testing.T) {
+	ctx := context.Background()
+	fc := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&workspacev1alpha1.Workspace{}).
+		Build()
+	log := zap.New(zap.UseDevMode(true))
+
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "pendex", Namespace: "default"},
+		Spec: workspacev1alpha1.WorkspaceSpec{
+			User:      workspacev1alpha1.UserInfo{ID: "pendex", Email: "pend@test.com"},
+			Resources: workspacev1alpha1.ResourceRequirements{CPU: "1", Memory: "1Gi", Storage: "10Gi"},
+			AIConfig: workspacev1alpha1.AIConfiguration{
+				Providers: []workspacev1alpha1.AIProvider{
+					{Name: "local", Endpoint: "http://vllm:8000", Models: []string{"model"}},
+				},
+			},
+		},
+	}
+	if err := fc.Create(ctx, ws); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
+	if err := fc.Status().Update(ctx, ws); err != nil {
+		t.Fatalf("Update status: %v", err)
+	}
+
+	lm := NewLifecycleManager(fc, log, testConfig())
+	claims := &Claims{Sub: "pendex", Email: "pend@test.com", UserID: "pendex"}
+
+	// EnsureExists must return immediately — no blocking poll.
+	result, err := lm.EnsureExists(ctx, "default", claims)
+	if err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+	if result.Status.Phase != workspacev1alpha1.WorkspacePhasePending {
+		t.Errorf("phase = %q, want Pending", result.Status.Phase)
+	}
+}

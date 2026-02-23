@@ -162,6 +162,22 @@ func TestBackendURL(t *testing.T) {
 	}
 }
 
+func TestBackendHTTPURL(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		want     string
+	}{
+		{"my-svc.default.svc.cluster.local", "http://my-svc.default.svc.cluster.local:7681"},
+		{"10.0.0.5", "http://10.0.0.5:7681"},
+	}
+	for _, tt := range tests {
+		got := BackendHTTPURL(tt.endpoint)
+		if got != tt.want {
+			t.Errorf("BackendHTTPURL(%q) = %q, want %q", tt.endpoint, got, tt.want)
+		}
+	}
+}
+
 func TestCopyFrames(t *testing.T) {
 	// Create a WebSocket echo server
 	echoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

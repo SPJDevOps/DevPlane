@@ -127,6 +127,47 @@ func TestEvictExpired_StopsOnContextCancel(t *testing.T) {
 	}
 }
 
+// TestValidate_ExpiredCacheEntry_EagerEviction seeds a stale (already-expired)
+// cache entry and verifies Validate removes it before attempting token verification.
+// The nil verifier causes a panic on the verify call; we use recover() to catch it
+// and then confirm the expired entry was removed from the index.
+func TestValidate_ExpiredCacheEntry_EagerEviction(t *testing.T) {
+	v := &Validator{
+		index: make(map[string]*list.Element),
+		lru:   list.New(),
+	}
+
+	rawToken := "stale-bearer-token"
+	key := hashToken(rawToken)
+
+	// Seed an already-expired entry.
+	entry := &cachedEntry{
+		key:    key,
+		claims: &Claims{Sub: "old", Email: "old@test.com", UserID: "old"},
+		expiry: time.Now().Add(-time.Hour),
+	}
+	elem := v.lru.PushFront(entry)
+	v.index[key] = elem
+
+	// Validate evicts the expired entry before calling v.verifier.Verify.
+	// v.verifier is nil so Verify will panic; use recover to let the test continue.
+	func() {
+		defer func() { recover() }() //nolint:errcheck
+		_, _ = v.Validate(context.Background(), rawToken)
+	}()
+
+	v.mu.Lock()
+	_, stillPresent := v.index[key]
+	v.mu.Unlock()
+
+	if stillPresent {
+		t.Error("expired cache entry should have been evicted before verifier call")
+	}
+	if v.lru.Len() != 0 {
+		t.Errorf("LRU list len = %d, want 0 after eviction", v.lru.Len())
+	}
+}
+
 func TestHashToken(t *testing.T) {
 	h1 := hashToken("token-a")
 	h2 := hashToken("token-b")
