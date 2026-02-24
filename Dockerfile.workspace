@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Versions: kubectl 1.33+ for CVE fixes (1.29 EOL); Helm 4 not affected by CVE-2025-32386; ttyd from apt (distro patches).
 ARG KUBECTL_VERSION=1.33.8
-ARG HELM_VERSION=4.0.0
+ARG HELM_VERSION=4.1.1
 ARG K9S_VERSION=0.50.18
 ARG GO_VERSION=1.26.0
 ARG NODE_MAJOR=24
@@ -43,7 +43,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-ARG OPENCODE_VERSION=1.2.9
+ARG OPENCODE_VERSION=1.2.10
 
 # ── opencode (anomalyco/opencode) ─────────────────────────────────────────────
 # anomalyco uses "x64" for amd64; arm64 stays "arm64".
@@ -55,7 +55,7 @@ RUN OPENCODE_ARCH=$([ "${TARGETARCH}" = "amd64" ] && echo "x64" || echo "${TARGE
     && find /tmp/opencode -type f -name 'opencode' -exec install -m 755 {} /usr/local/bin/opencode \; \
     && rm -rf /tmp/opencode
 
-ARG STARSHIP_VERSION=1.22.1
+ARG STARSHIP_VERSION=1.24.2
 
 # ── Starship prompt ───────────────────────────────────────────────────────────
 # Uses musl static builds; no glibc dependency.
