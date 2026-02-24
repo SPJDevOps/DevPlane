@@ -25,6 +25,7 @@ type LifecycleConfig struct {
 	DefaultCPU     string
 	DefaultMemory  string
 	DefaultStorage string
+	StorageClass   string
 }
 
 // LifecycleManager creates and retrieves Workspace custom resources on behalf
@@ -70,6 +71,9 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 				},
 				AIConfig: workspacev1alpha1.AIConfiguration{
 					Providers: m.cfg.Providers,
+				},
+				Persistence: workspacev1alpha1.PersistenceConfig{
+					StorageClass: m.cfg.StorageClass,
 				},
 			},
 		}
@@ -127,6 +131,9 @@ func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, c
 				},
 				AIConfig: workspacev1alpha1.AIConfiguration{
 					Providers: m.cfg.Providers,
+				},
+				Persistence: workspacev1alpha1.PersistenceConfig{
+					StorageClass: m.cfg.StorageClass,
 				},
 			},
 		}

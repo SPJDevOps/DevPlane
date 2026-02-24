@@ -44,6 +44,10 @@ manifests: controller-gen
 generate: controller-gen
 	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths="./..."
 
+.PHONY: helm-crds
+helm-crds: manifests ## Sync generated CRDs into the Helm chart (run after make manifests)
+	cp config/crd/bases/*.yaml deploy/helm/workspace-operator/crds/
+
 .PHONY: fmt
 fmt:
 	go fmt ./...

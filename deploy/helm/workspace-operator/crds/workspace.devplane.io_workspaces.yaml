@@ -62,17 +62,43 @@ spec:
                       format: int32
                       type: integer
                     type: array
-                  endpoint:
+                  providers:
                     description: |-
-                      Endpoint is the base URL of the OpenAI-compatible LLM service
-                      (e.g., "http://vllm.ai-system.svc:8000", "http://ollama.ai-system.svc:11434").
-                    type: string
-                  model:
-                    description: Model is the model identifier (e.g., "deepseek-coder-33b-instruct").
-                    type: string
+                      Providers is the list of AI provider backends available to this workspace.
+                      At least one provider must be specified.
+                    items:
+                      description: |-
+                        AIProvider configures a single AI provider backend.
+                        The endpoint must be OpenAI API-compatible (vLLM, Ollama, OpenWebUI, etc.).
+                      properties:
+                        endpoint:
+                          description: |-
+                            Endpoint is the base URL of the OpenAI-compatible LLM service
+                            (e.g., "http://vllm.ai-system.svc:8000", "http://ollama.ai-system.svc:11434").
+                          minLength: 1
+                          type: string
+                        models:
+                          description: Models lists one or more model identifiers
+                            served by this provider.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                        name:
+                          description: |-
+                            Name is the provider key used in the opencode configuration (e.g., "local", "cloud").
+                            Must be a non-empty identifier unique within the providers list.
+                          minLength: 1
+                          type: string
+                      required:
+                      - endpoint
+                      - models
+                      - name
+                      type: object
+                    minItems: 1
+                    type: array
                 required:
-                - endpoint
-                - model
+                - providers
                 type: object
               persistence:
                 description: Persistence configures storage class for the workspace

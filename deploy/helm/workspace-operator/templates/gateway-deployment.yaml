@@ -55,6 +55,14 @@ spec:
           value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
         - name: AI_PROVIDERS_JSON
           value: {{ .Values.workspace.ai.providers | toJson | quote }}
+        - name: DEFAULT_CPU
+          value: {{ .Values.workspace.defaultResources.cpu | quote }}
+        - name: DEFAULT_MEMORY
+          value: {{ .Values.workspace.defaultResources.memory | quote }}
+        - name: DEFAULT_STORAGE
+          value: {{ .Values.workspace.defaultResources.storage | quote }}
+        - name: DEFAULT_STORAGE_CLASS
+          value: {{ .Values.workspace.storageClass | quote }}
         {{- if .Values.gateway.tls.customCABundle.configMapName }}
         - name: SSL_CERT_FILE
           value: /etc/ssl/certs/custom/ca-certificates.crt

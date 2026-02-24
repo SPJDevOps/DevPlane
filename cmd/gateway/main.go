@@ -122,9 +122,10 @@ func main() {
 
 	lifecycle := gw.NewLifecycleManager(k8sClient, log, gw.LifecycleConfig{
 		Providers:      aiProviders,
-		DefaultCPU:     "2",
-		DefaultMemory:  "4Gi",
-		DefaultStorage: "20Gi",
+		DefaultCPU:     envOr("DEFAULT_CPU", "2"),
+		DefaultMemory:  envOr("DEFAULT_MEMORY", "4Gi"),
+		DefaultStorage: envOr("DEFAULT_STORAGE", "20Gi"),
+		StorageClass:   os.Getenv("DEFAULT_STORAGE_CLASS"),
 	})
 	proxy := gw.NewProxy(log)
 
