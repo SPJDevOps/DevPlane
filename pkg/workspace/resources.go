@@ -17,9 +17,12 @@ import (
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
 )
 
-// dnsLabelRegex matches a valid Kubernetes DNS label: lowercase alphanumeric,
-// may contain hyphens, must start and end with alphanumeric, max 63 chars.
-var dnsLabelRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`)
+// dnsLabelRegex matches a valid Kubernetes DNS label per RFC 1035: must start
+// with a lowercase letter, may contain lowercase alphanumeric and hyphens,
+// must end with alphanumeric, max 63 chars.
+// RFC 1035 (not RFC 1123) is used because Kubernetes validates Service names
+// with the stricter rule that requires the first character to be a letter.
+var dnsLabelRegex = regexp.MustCompile(`^[a-z]([a-z0-9\-]*[a-z0-9])?$`)
 
 const (
 	labelApp       = "workspace"
@@ -116,8 +119,10 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 		Spec: corev1.PodSpec{
 			ServiceAccountName: ServiceAccountName(userID),
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot: ptr(true),
-				RunAsUser:    ptr(int64(1000)),
+				RunAsNonRoot:        ptr(true),
+				RunAsUser:           ptr(int64(1000)),
+				FSGroup:             ptr(int64(1000)),
+				FSGroupChangePolicy: ptr(corev1.FSGroupChangeOnRootMismatch),
 				SeccompProfile: &corev1.SeccompProfile{
 					Type: corev1.SeccompProfileTypeRuntimeDefault,
 				},
@@ -256,7 +261,7 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	}
 	// User ID is used as a prefix in Kubernetes resource names (DNS label format).
 	if !dnsLabelRegex.MatchString(s.User.ID) {
-		return errors.New("spec.user.id must be a valid DNS label: lowercase alphanumeric and hyphens only, must start and end with alphanumeric")
+		return errors.New("spec.user.id must be a valid DNS label: must start with a lowercase letter, lowercase alphanumeric and hyphens only, must end with alphanumeric")
 	}
 	if s.User.Email == "" {
 		return errors.New("spec.user.email is required")

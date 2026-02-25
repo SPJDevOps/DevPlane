@@ -49,12 +49,17 @@ var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeUserID converts an OIDC sub into a Kubernetes DNS-label-safe string.
 // E.g. "user|12345" → "user-12345", truncated to 63 chars.
+// Keycloak/UUID subs that start with a digit get a "u-" prefix so the result
+// satisfies RFC 1035 (Service names must begin with a letter).
 func sanitizeUserID(sub string) string {
 	s := strings.ToLower(sub)
 	s = nonAlphaNum.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
+	if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
+		s = "u-" + s
+	}
 	if len(s) > 63 {
-		s = s[:63]
+		s = strings.TrimRight(s[:63], "-")
 	}
 	return s
 }

@@ -402,6 +402,17 @@ func TestValidateSpec_InvalidDNSLabel_Hyphen(t *testing.T) {
 	}
 }
 
+func TestValidateSpec_InvalidDNSLabel_DigitFirst(t *testing.T) {
+	ws := minimalWorkspace()
+	// RFC 1035: Service names must start with a letter; a digit-first ID must be
+	// rejected so the caller (gateway) can apply the "u-" prefix before creating
+	// the Workspace CR.
+	ws.Spec.User.ID = "12345678-abcd-efef-1234-abcdefabcdef"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for user.id starting with a digit")
+	}
+}
+
 func TestValidateSpec_MissingCPU(t *testing.T) {
 	ws := minimalWorkspace()
 	ws.Spec.Resources.CPU = ""
@@ -530,5 +541,17 @@ func TestBuildPod_SecurityContext(t *testing.T) {
 			}
 		}
 		t.Errorf("container must declare port name=ttyd containerPort=%d protocol=TCP", ttydPort)
+	})
+
+	t.Run("FSGroup1000", func(t *testing.T) {
+		if psc == nil || psc.FSGroup == nil || *psc.FSGroup != 1000 {
+			t.Errorf("PodSecurityContext.FSGroup = %v, want 1000", psc.FSGroup)
+		}
+	})
+
+	t.Run("FSGroupChangeOnRootMismatch", func(t *testing.T) {
+		if psc == nil || psc.FSGroupChangePolicy == nil || *psc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+			t.Errorf("PodSecurityContext.FSGroupChangePolicy = %v, want OnRootMismatch", psc.FSGroupChangePolicy)
+		}
 	})
 }

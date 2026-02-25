@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,16 @@ func TestSanitizeUserID(t *testing.T) {
 			return ""
 		}()},
 		{name: "long alphanumeric", sub: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01234567890", want: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0"},
+		// Keycloak subs are UUIDs; ~62% start with a hex digit (0-9).
+		{name: "uuid digit-first", sub: "12345678-abcd-efef-1234-abcdefabcdef", want: "u-12345678-abcd-efef-1234-abcdefabcdef"},
+		{name: "uuid letter-first", sub: "f47ac10b-58cc-4372-a567-0e02b2c3d479", want: "f47ac10b-58cc-4372-a567-0e02b2c3d479"},
+		// 62-char digit-first string: after "u-" prefix (64 chars) truncate to 63,
+		// then trim the trailing "-" introduced by truncation.
+		{
+			name: "digit-first truncation trims trailing hyphen",
+			sub:  "9" + strings.Repeat("a", 59) + "-b",
+			want: "u-9" + strings.Repeat("a", 59),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
