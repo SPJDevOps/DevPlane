@@ -26,16 +26,17 @@ func TestSanitizeUserID(t *testing.T) {
 			// 100 null bytes → sanitized to empty after trim
 			return ""
 		}()},
-		{name: "long alphanumeric", sub: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01234567890", want: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0"},
+		// Truncated at 49 (= 63 RFC-1035 max − 14 for "-workspace-svc" suffix).
+		{name: "long alphanumeric", sub: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01234567890", want: "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklm"},
 		// Keycloak subs are UUIDs; ~62% start with a hex digit (0-9).
 		{name: "uuid digit-first", sub: "12345678-abcd-efef-1234-abcdefabcdef", want: "u-12345678-abcd-efef-1234-abcdefabcdef"},
 		{name: "uuid letter-first", sub: "f47ac10b-58cc-4372-a567-0e02b2c3d479", want: "f47ac10b-58cc-4372-a567-0e02b2c3d479"},
-		// 62-char digit-first string: after "u-" prefix (64 chars) truncate to 63,
-		// then trim the trailing "-" introduced by truncation.
+		// digit-first: after "u-" prefix the string is 50 chars; truncation at 49
+		// lands on "-", which TrimRight removes.
 		{
 			name: "digit-first truncation trims trailing hyphen",
-			sub:  "9" + strings.Repeat("a", 59) + "-b",
-			want: "u-9" + strings.Repeat("a", 59),
+			sub:  "9" + strings.Repeat("a", 45) + "-b",
+			want: "u-9" + strings.Repeat("a", 45),
 		},
 	}
 	for _, tt := range tests {

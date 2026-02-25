@@ -58,8 +58,10 @@ func sanitizeUserID(sub string) string {
 	if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
 		s = "u-" + s
 	}
-	if len(s) > 63 {
-		s = strings.TrimRight(s[:63], "-")
+	// 49 = 63 (RFC 1035 DNS label max) − 14 ("-workspace-svc", the longest
+	// resource-name suffix), so the derived Service name stays ≤ 63 chars.
+	if len(s) > 49 {
+		s = strings.TrimRight(s[:49], "-")
 	}
 	return s
 }

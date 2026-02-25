@@ -256,8 +256,10 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 	if s.User.ID == "" {
 		return errors.New("spec.user.id is required")
 	}
-	if len(s.User.ID) > 63 {
-		return fmt.Errorf("spec.user.id must be 63 characters or fewer (got %d)", len(s.User.ID))
+	// 49 = 63 (RFC 1035 DNS label max) − 14 ("-workspace-svc", the longest
+	// resource-name suffix), so the derived Service name stays ≤ 63 chars.
+	if len(s.User.ID) > 49 {
+		return fmt.Errorf("spec.user.id must be 49 characters or fewer (got %d)", len(s.User.ID))
 	}
 	// User ID is used as a prefix in Kubernetes resource names (DNS label format).
 	if !dnsLabelRegex.MatchString(s.User.ID) {

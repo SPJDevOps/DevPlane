@@ -378,9 +378,17 @@ func TestValidateSpec_NilWorkspace(t *testing.T) {
 
 func TestValidateSpec_UserIDTooLong(t *testing.T) {
 	ws := minimalWorkspace()
-	ws.Spec.User.ID = strings.Repeat("a", 64)
+	ws.Spec.User.ID = strings.Repeat("a", 50) // 50 > 49-char limit
 	if err := ValidateSpec(ws); err == nil {
-		t.Error("ValidateSpec: expected error for user.id > 63 chars")
+		t.Error("ValidateSpec: expected error for user.id > 49 chars")
+	}
+}
+
+func TestValidateSpec_UserIDAtMaxLength(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.User.ID = strings.Repeat("a", 49) // exactly at the 49-char limit
+	if err := ValidateSpec(ws); err != nil {
+		t.Errorf("ValidateSpec: unexpected error for 49-char user.id: %v", err)
 	}
 }
 
