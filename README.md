@@ -7,9 +7,8 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./hack/boilerplate.go.txt)
 [![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](https://go.dev)
 
-<!-- Replace this line with your screenshot once you have it:
+
 ![DevPlane workspace — browser terminal with opencode AI assistant](./docs/screenshot.png)
--->
 
 ---
 
