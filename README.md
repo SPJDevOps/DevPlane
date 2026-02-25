@@ -1,194 +1,298 @@
 # DevPlane
 
-DevPlane is a Kubernetes operator that provides **AI-powered development workspaces** for air-gapped and restricted environments. Developers authenticate via OIDC, get isolated terminal sessions with persistent storage, and a pre-configured AI coding assistant (opencode) connected to any OpenAI-compatible LLM endpoint.
+> Browser-based AI coding workspaces on Kubernetes — air-gap friendly, OIDC secured, one Helm install.
 
-## Project Overview
+[![CI](https://github.com/SPJDevOps/DevPlane/actions/workflows/ci.yml/badge.svg)](https://github.com/SPJDevOps/DevPlane/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SPJDevOps/DevPlane)](https://github.com/SPJDevOps/DevPlane/releases)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./hack/boilerplate.go.txt)
+[![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](https://go.dev)
 
-- **Operator**: Watches `Workspace` custom resources and creates per-user Pods, PVCs, and Services with strict security settings.
-- **Gateway**: Handles OIDC login and proxies WebSocket traffic to the user’s workspace pod.
-- **Workspace Pod**: Ubuntu-based container with ttyd, tmux, and opencode, pre-configured to connect to any OpenAI-compatible LLM endpoint.
+<!-- Replace this line with your screenshot once you have it:
+![DevPlane workspace — browser terminal with opencode AI assistant](./docs/screenshot.png)
+-->
 
-Use cases include DevOps in air-gapped environments, understanding codebases with AI, planning implementations, and data science with AI-assisted Python.
+---
 
-## Prerequisites
+## What is this?
 
-- **Kubernetes**: 1.27 or later.
-- **LLM endpoint (optional)**: Any OpenAI-compatible API reachable from workspace pods — vLLM, Ollama, LM Studio, or a hosted service. Without one, the shell and all dev tools still work; `opencode` will simply report a connection error.
-- **OIDC**: An OIDC-compatible IdP (e.g. Keycloak, Dex, Okta) for Gateway authentication.
-- **Go**: 1.21+ for building the operator and gateway.
-- **kubectl**: Configured for the target cluster.
-- **Optional**: `kustomize`, `controller-gen`, `golangci-lint` for manifests, code generation, and linting (see Makefile targets).
+Most teams that need AI-assisted development in restricted environments (air-gapped data centres, regulated industries, enterprise private clouds) end up with one of two bad outcomes: they either punch holes in the perimeter to reach a hosted AI API, or they give up on AI tooling entirely.
 
-## Published Releases
+DevPlane takes a third path: a Kubernetes operator that provisions **isolated, browser-accessible terminal workspaces** for each user, pre-wired to whatever OpenAI-compatible LLM endpoint you already run on-cluster (vLLM, Ollama, LM Studio — anything). Users log in via your existing OIDC provider, get a persistent tmux session in the browser, and an AI coding assistant ([opencode](https://opencode.ai)) that talks only to your internal model. No VPN, no SSH keys, no data leaving the cluster.
 
-Container images (multi-arch `linux/amd64` + `linux/arm64`) are published to the GitHub Container Registry:
+Platform and infra teams get an equally important benefit: **developer access is policy-as-code**. NetworkPolicies are auto-generated per workspace from values your team controls centrally — which external ports are reachable, which in-cluster services developers can call, and how much CPU/memory/storage each workspace gets. There is no shared-box drift, no stale SSH keys to revoke, and no developer who can accidentally (or deliberately) reach a production database because their local environment happened to have the right network route.
 
-| Image | Pull reference |
-|-------|----------------|
-| Operator | `ghcr.io/spjdevops/devplane/workspace-operator:1.0.0` |
-| Gateway  | `ghcr.io/spjdevops/devplane/workspace-gateway:1.0.0`  |
-| Workspace | `ghcr.io/spjdevops/devplane/workspace:1.0.0`         |
+---
 
-The Helm chart is published to the GitHub Pages Helm repository:
+## Features
+
+- **Fully browser-based** — ttyd serves the terminal over WebSocket; nothing to install on the developer's machine
+- **OIDC authentication** — plug in Keycloak, Dex, Okta, or any compliant IdP; the gateway handles the OAuth2 flow and derives workspace identity from token claims
+- **Per-user isolated workspaces** — each user gets their own Pod, PVC, and headless Service with strict NetworkPolicies (deny-all default, egress only to your LLM namespace)
+- **Persistent storage** — a dedicated PVC per user survives pod restarts and idle-timeout evictions; code and config are never lost
+- **Automatic idle-timeout and self-service recovery** — the operator stops idle pods and the gateway transparently restarts them on the user's next login, with no manual intervention
+- **Any OpenAI-compatible LLM** — vLLM, Ollama, LM Studio, or a remote API; configure multiple providers and let opencode switch between them
+- **Infra-team governance by default** — egress ports, reachable in-cluster namespaces, and resource limits are all set centrally by your platform team and enforced as Kubernetes NetworkPolicies and ResourceQuotas; developers cannot exceed or work around them. OIDC identity means no SSH key sprawl and instant access revocation when someone leaves the team.
+- **Hardened pod security** — non-root (`UID 1000`), read-only root filesystem, all capabilities dropped, `seccompProfile: RuntimeDefault`, no privileged mode
+- **Air-gap ready** — mirror three images to your internal registry, point the Helm values at them, done
+- **Private CA support** — mount a CA bundle once in Helm; it propagates to both the gateway (OIDC validation) and every workspace pod (git, curl, npm, Python requests)
+- **Multi-arch images** — `linux/amd64` + `linux/arm64` published to GHCR for every release
+
+---
+
+## Architecture
 
 ```
-https://spjdevops.github.io/DevPlane
+                    ┌─────────────────────────────────────────────────────────────┐
+                    │                     Kubernetes Cluster                        │
+                    │                                                               │
+  User Browser      │   ┌─────────────┐     ┌──────────────┐     ┌─────────────┐  │
+  (HTTPS/WSS)       │   │   Ingress   │────▶│   Gateway    │────▶│  Operator   │  │
+  ────────────────▶ │   │ (optional)  │     │ OIDC + Proxy │     │ (controller)│  │
+                    │   └─────────────┘     └──────┬───────┘     └──────┬──────┘  │
+                    │                               │                    │          │
+                    │                               │ create/get        │ watch    │
+                    │                               │ Workspace CR      │ Workspace│
+                    │                               ▼                    ▼          │
+                    │                        ┌──────────────┐     ┌─────────────┐  │
+                    │                        │  Workspace   │     │  Workspace  │  │
+                    │                        │     CRs      │◀────│    Pod +    │  │
+                    │                        │  (per user)  │     │  PVC + Svc  │  │
+                    │                        └──────┬───────┘     └─────────────┘  │
+                    │                               │                               │
+                    │                               │ WebSocket proxy               │
+                    │                               ▼                               │
+                    │                        ┌──────────────┐                       │
+                    │                        │  Workspace   │                       │
+                    │                        │  Pod (ttyd + │                       │
+                    │                        │  tmux +      │                       │
+                    │                        │  opencode)   │                       │
+                    │                        └──────┬───────┘                       │
+                    │                               │ egress only                   │
+                    │                               ▼                               │
+                    │                        ┌──────────────┐                       │
+                    │                        │  vLLM / LLM  │  (in-cluster)        │
+                    │                        └──────────────┘                       │
+                    └─────────────────────────────────────────────────────────────┘
 ```
 
-[index.yaml](https://spjdevops.github.io/DevPlane/index.yaml) · [GitHub Releases](https://github.com/SPJDevOps/DevPlane/releases)
+Three components ship as separate images:
+
+| Component | Role |
+|-----------|------|
+| **Operator** | Watches `Workspace` CRDs; reconciles Pod, PVC, Service, ServiceAccount, NetworkPolicies per user. Stateless. |
+| **Gateway** | Single user-facing entrypoint. Handles OIDC login, creates/gets Workspace CRs, proxies WebSocket to the user's pod. |
+| **Workspace Pod** | Ubuntu 24.04 + ttyd + tmux + opencode. Non-root, read-only root FS. Env vars from the CR wire opencode to the LLM. |
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full auth flow and security model.
+
+---
 
 ## Quick Start
 
-1. **Add the Helm repo and install**:
+### Prerequisites
 
-   ```bash
-   helm repo add devplane https://spjdevops.github.io/DevPlane
-   helm repo update
-   helm install workspace-operator devplane/workspace-operator \
-     --version 1.0.0 \
-     --namespace workspace-operator-system \
-     --create-namespace \
-     --set gateway.oidc.issuerURL=https://idp.example.com \
-     --set gateway.oidc.clientID=devplane \
-     --set gateway.oidc.clientSecret=<your-client-secret> \
-     --set gateway.oidc.redirectURL=https://devplane.example.com/callback \
-     --set 'workspace.ai.providers[0].name=local' \
-     --set 'workspace.ai.providers[0].endpoint=http://vllm.ai-system.svc:8000' \
-     --set 'workspace.ai.providers[0].models[0]=deepseek-coder-33b-instruct'
-   ```
+- Kubernetes 1.27+
+- Helm 3.10+
+- An OIDC-compatible identity provider (Keycloak, Dex, Okta, Azure AD, …)
+- An OpenAI-compatible LLM endpoint reachable from the cluster — optional, workspaces work without one
 
-   > **Naming note:** AI providers are configured with `workspace.ai.*` in Helm values and `spec.aiConfig.*` in Workspace CR manifests. These are the same data — the Helm chart translates between them automatically. See [AI Provider Configuration](./docs/deployment.md#ai-provider-configuration-helm-vs-workspace-cr) for details.
+### 1. Install with Helm
 
-2. **Create a sample Workspace** (after the operator is running):
+```bash
+helm repo add devplane https://spjdevops.github.io/DevPlane
+helm repo update
 
-   ```bash
-   kubectl apply -f config/samples/workspace_v1alpha1_workspace.yaml
-   ```
+helm install workspace-operator devplane/workspace-operator \
+  --version 1.1.2 \
+  --namespace workspace-operator-system \
+  --create-namespace \
+  --set gateway.oidc.issuerURL=https://idp.example.com \
+  --set gateway.oidc.clientID=devplane \
+  --set gateway.oidc.clientSecret=<your-client-secret> \
+  --set gateway.oidc.redirectURL=https://devplane.example.com/callback \
+  --set 'workspace.ai.providers[0].name=local' \
+  --set 'workspace.ai.providers[0].endpoint=http://vllm.ai-system.svc:8000' \
+  --set 'workspace.ai.providers[0].models[0]=deepseek-coder-33b-instruct'
+```
 
-3. **Access the terminal**: Navigate to the Gateway URL (e.g. `https://devplane.example.com`). You will be redirected to your identity provider to log in. After authenticating, the gateway provisions your workspace and proxies the ttyd terminal directly in the browser — no separate token needed.
+### 2. Verify
 
-4. **Run the operator locally** against your current kubeconfig instead of deploying:
+```bash
+# Operator and gateway should be Running
+kubectl get pods -n workspace-operator-system
 
-   ```bash
-   make manifests
-   make install   # installs CRDs
-   make run       # runs operator in foreground
-   ```
+# CRD installed
+kubectl get crd workspaces.workspace.devplane.io
+```
 
-## Architecture Overview
+### 3. Open the browser
 
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for:
+Navigate to the URL you configured as `gateway.oidc.redirectURL` (minus `/callback`). You will be redirected to your IdP, and after login the gateway provisions your workspace and drops you into a browser terminal — no separate token, no VPN, no SSH key.
 
-- Component diagram (Gateway, Operator, Workspace Pods, vLLM)
-- Authentication flow (OIDC → Gateway → Workspace creation)
-- Data flow (user request → pod creation → WebSocket proxy)
-- Security model (NetworkPolicies, RBAC, pod security)
-- Storage strategy (one PVC per user, lifecycle)
+### Air-gapped clusters
 
-## Development Setup
+Mirror the three images to your internal registry before installing:
 
-1. **Clone and dependencies**
+```bash
+REGISTRY=registry.example.com/devplane
+VERSION=1.1.2
 
-   ```bash
-   cd /path/to/DevPlane
-   go mod download
-   make tidy
-   ```
+for img in workspace-operator workspace-gateway workspace; do
+  docker pull ghcr.io/spjdevops/devplane/${img}:${VERSION}
+  docker tag  ghcr.io/spjdevops/devplane/${img}:${VERSION} ${REGISTRY}/${img}:${VERSION}
+  docker push ${REGISTRY}/${img}:${VERSION}
+done
+```
 
-2. **Generate code and manifests**
+Then override in your values file:
 
-   ```bash
-   make generate
-   make manifests
-   ```
+```yaml
+operator:
+  image:
+    repository: registry.example.com/devplane/workspace-operator
+    tag: "1.1.2"
+gateway:
+  image:
+    repository: registry.example.com/devplane/workspace-gateway
+    tag: "1.1.2"
+workspace:
+  image:
+    repository: registry.example.com/devplane/workspace
+    tag: "1.1.2"
+```
 
-3. **Run tests and lint**
+---
 
-   ```bash
-   make test
-   make lint
-   ```
+## Published Images
 
-4. **Build**
+Multi-arch (`linux/amd64` + `linux/arm64`) images are published to GHCR on every release:
 
-   ```bash
-   make build
-   ```
+| Image | Pull reference |
+|-------|----------------|
+| Operator  | `ghcr.io/spjdevops/devplane/workspace-operator:1.1.2` |
+| Gateway   | `ghcr.io/spjdevops/devplane/workspace-gateway:1.1.2`  |
+| Workspace | `ghcr.io/spjdevops/devplane/workspace:1.1.2`          |
 
-5. **Run operator locally**
+Helm chart: [https://spjdevops.github.io/DevPlane](https://spjdevops.github.io/DevPlane) — [index.yaml](https://spjdevops.github.io/DevPlane/index.yaml) · [GitHub Releases](https://github.com/SPJDevOps/DevPlane/releases)
 
-   ```bash
-   make run
-   ```
+---
 
-   For a walkthrough of testing the workspace image with Docker and the full stack with KIND, see **[docs/local-development.md](./docs/local-development.md)**.
+## Configuration
 
-6. **Docker images**
+### AI providers
 
-   ```bash
-   make docker-build
-   ```
+Configure one or more OpenAI-compatible backends. Each user's workspace gets all providers injected as environment variables; opencode lets them switch between them.
 
-7. **Deploy to cluster** (after setting `IMG` if needed)
+```yaml
+workspace:
+  ai:
+    providers:
+      - name: local-vllm
+        endpoint: "http://vllm.ai-system.svc:8000"
+        models:
+          - deepseek-coder-33b-instruct
+      - name: ollama
+        endpoint: "http://ollama.ai-system.svc:11434"
+        models:
+          - codellama:13b
+    egressNamespaces: ai-system   # in-cluster namespaces workspace pods may reach
+    egressPorts: "22,80,443,8000,11434"  # external TCP ports allowed in egress policy
+```
 
-   ```bash
-   make deploy
-   ```
+### Private CA certificates
 
-### Makefile Targets
+If your IdP or internal services use a private CA, create a ConfigMap with the PEM bundle and reference it in values — the chart mounts it in the gateway and the operator propagates it to every workspace pod automatically:
 
-| Target          | Description                    |
-|-----------------|--------------------------------|
-| `make manifests`| Generate CRDs and RBAC         |
-| `make generate` | Generate deepcopy etc.         |
-| `make test`     | Run tests                      |
-| `make build`    | Build operator binary          |
-| `make docker-build` | Build operator/gateway/workspace images |
-| `make deploy`   | Deploy with kustomize          |
-| `make lint`     | Run golangci-lint              |
+```yaml
+gateway:
+  tls:
+    customCABundle:
+      configMapName: devplane-ca-bundle   # namespace: workspace-operator-system
+```
 
-### Directory Layout
+See [docs/deployment.md](./docs/deployment.md) for the full values reference, production hardening checklist, upgrade/rollback notes, and observability setup.
 
-- `api/v1alpha1/` — Workspace CRD types and generated code
-- `controllers/` — Workspace reconciliation logic
-- `cmd/gateway/` — Gateway service entrypoint
-- `pkg/gateway/` — Gateway HTTP handlers (auth, proxy, lifecycle)
-- `pkg/security/` — RBAC and NetworkPolicy helpers
-- `config/` — CRD, RBAC, manager, samples
-- `deploy/helm/workspace-operator/` — Helm chart
-- `hack/` — Boilerplate and workspace entrypoint script
+### NetworkPolicy egress ports
 
-## NetworkPolicy — Configurable Egress Ports
-
-Each workspace pod gets three NetworkPolicies: deny-all, ingress-from-gateway, and an egress policy. The egress policy allows:
-
-- DNS (port 53 UDP/TCP) to `kube-system`
-- Any port to in-cluster LLM namespaces (e.g. `ai-system`)
-- A configurable list of TCP ports to external IPs (`0.0.0.0/0`)
-
-The default external port list is `22, 80, 443, 5000, 8000, 8080, 8081, 11434`:
+By default each workspace pod is allowed egress on:
 
 | Port | Purpose |
 |------|---------|
 | 22 | Git over SSH |
 | 80, 443 | HTTP / HTTPS |
 | 5000 | Self-hosted Docker registry |
-| 8000 | vLLM (bare-metal or in-cluster) |
+| 8000 | vLLM |
 | 8080, 8081 | Nexus, Artifactory, generic alt-HTTP |
 | 11434 | Ollama |
 
-Override operator-wide via `values.yaml` (`workspace.ai.egressPorts`) or per-workspace via `spec.aiConfig.egressPorts`. Changes take effect on the next reconcile without requiring deletion of the existing policy.
+Override per-cluster (`workspace.ai.egressPorts` in values) or per-workspace (`spec.aiConfig.egressPorts` on the CR). Changes take effect on the next reconcile.
+
+---
 
 ## Troubleshooting
 
-- **CRD not found**: Run `make manifests` and install the CRDs from `config/crd/bases/` (or via `config/default` with `make deploy`).
-- **Operator not reconciling**: Check operator logs and that the manager has RBAC to read/write Workspaces, Pods, PVCs, and Services.
-- **Pod stays Pending**: Check PVC binding and StorageClass; ensure no resource quota or scheduler issues.
-- **Gateway cannot create Workspace**: Ensure the Gateway’s ServiceAccount has RBAC to create/update Workspace CRs and to read their status.
-- **OIDC TLS errors / private CA**: If your IdP (e.g. Keycloak) uses a certificate signed by an internal CA, mount a CA bundle for both the gateway and workspace pods — see [Private CA certificates](./docs/deployment.md#private--self-signed-ca-certificates) in the deployment guide.
-- **Workspace cannot reach external service**: Verify the required port is in `egressPorts` (`kubectl get networkpolicy <userid>-workspace-egress -n workspaces -o yaml`).
-- **Workspace cannot reach in-cluster LLM**: Ensure the LLM namespace is listed in `egressNamespaces`.
+| Symptom | Fix |
+|---------|-----|
+| CRD not found | `make manifests && make install` or apply `config/crd/bases/` |
+| Pod stays `Pending` | Check PVC binding and StorageClass; check resource quotas |
+| Gateway 401 errors | Verify `issuerURL` matches the `iss` claim exactly; check NTP sync |
+| Workspace can't reach LLM | Ensure LLM namespace is in `egressNamespaces`; check NetworkPolicy with `kubectl get netpol -n workspaces` |
+| Workspace can't reach external service | Add the required port to `egressPorts` |
+| OIDC TLS errors | Mount a CA bundle — see [Private CA certificates](./docs/deployment.md#private--self-signed-ca-certificates) |
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/SPJDevOps/DevPlane.git
+cd DevPlane
+go mod download
+
+make generate    # generate deepcopy methods
+make manifests   # generate CRD + RBAC YAML
+make test        # unit tests + envtest integration tests (70% coverage enforced)
+make lint        # golangci-lint
+make build       # compile operator binary
+make run         # run operator locally against current kubeconfig
+```
+
+Run a single test:
+
+```bash
+go test -run TestIsPodReady ./controllers
+go test -run TestBuildPod ./pkg/workspace
+```
+
+For a full local walkthrough (workspace image with Docker, full stack with KIND), see [docs/local-development.md](./docs/local-development.md).
+
+### Directory layout
+
+```
+api/v1alpha1/      Workspace CRD types and generated code
+controllers/       Workspace reconciliation logic
+cmd/gateway/       Gateway entrypoint
+pkg/gateway/       Gateway HTTP handlers (auth, lifecycle, proxy)
+pkg/security/      RBAC and NetworkPolicy helpers
+config/            CRD, RBAC, manager manifests, CR samples
+deploy/helm/       Helm chart
+hack/              Boilerplate and workspace entrypoint script
+```
+
+### Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make manifests` | Generate CRDs and RBAC from annotations |
+| `make generate` | Generate deepcopy methods |
+| `make test` | Run all tests with coverage |
+| `make lint` | Run golangci-lint |
+| `make build` | Build operator binary |
+| `make docker-build` | Build all three images |
+| `make deploy` | Deploy with kustomize |
+
+---
 
 ## License
 
-Apache 2.0 (see hack/boilerplate.go.txt).
+Apache 2.0 — see [hack/boilerplate.go.txt](./hack/boilerplate.go.txt).
