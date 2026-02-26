@@ -184,8 +184,29 @@ func BuildEgressNetworkPolicy(workspace *workspacev1alpha1.Workspace, llmNamespa
 // BuildIngressFromGatewayNetworkPolicy returns a NetworkPolicy that allows the
 // gateway pods (selected by app=workspace-gateway) to reach the workspace pod
 // on the ttyd port.
-func BuildIngressFromGatewayNetworkPolicy(workspace *workspacev1alpha1.Workspace, scheme *runtime.Scheme) (*networkingv1.NetworkPolicy, error) {
+//
+// gatewayNamespace is the namespace where gateway pods run (e.g.
+// "workspace-operator-system").  When non-empty, the peer includes a
+// NamespaceSelector so that Kubernetes uses AND semantics: only gateway pods
+// in that specific namespace are permitted.  When empty, the policy falls back
+// to same-namespace-only matching (backward-compatible for single-namespace
+// deployments).
+func BuildIngressFromGatewayNetworkPolicy(workspace *workspacev1alpha1.Workspace, gatewayNamespace string, scheme *runtime.Scheme) (*networkingv1.NetworkPolicy, error) {
 	userID := workspace.Spec.User.ID
+
+	peer := networkingv1.NetworkPolicyPeer{
+		PodSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"app": labelGatewayApp},
+		},
+	}
+	if gatewayNamespace != "" {
+		peer.NamespaceSelector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"kubernetes.io/metadata.name": gatewayNamespace,
+			},
+		}
+	}
+
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      netpolName(userID, "ingress-gateway"),
@@ -204,13 +225,7 @@ func BuildIngressFromGatewayNetworkPolicy(workspace *workspacev1alpha1.Workspace
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: protoPtr(corev1.ProtocolTCP), Port: port(7681)},
 					},
-					From: []networkingv1.NetworkPolicyPeer{
-						{
-							PodSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{"app": labelGatewayApp},
-							},
-						},
-					},
+					From: []networkingv1.NetworkPolicyPeer{peer},
 				},
 			},
 		},

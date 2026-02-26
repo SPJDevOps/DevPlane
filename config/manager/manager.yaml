@@ -24,6 +24,9 @@ spec:
         args:
         - --leader-elect
         imagePullPolicy: IfNotPresent
+        env:
+        - name: GATEWAY_NAMESPACE
+          value: "workspace-operator-system"
         resources:
           limits:
             cpu: 500m

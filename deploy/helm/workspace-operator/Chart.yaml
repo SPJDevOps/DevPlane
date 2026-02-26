@@ -2,8 +2,8 @@ apiVersion: v2
 name: workspace-operator
 description: AI-powered development workspaces for air-gapped environments
 type: application
-version: 1.1.2
-appVersion: "1.1.2"
+version: 1.1.3
+appVersion: "1.1.3"
 keywords:
   - workspace
   - kubernetes

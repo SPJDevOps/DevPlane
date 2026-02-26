@@ -281,39 +281,72 @@ func TestBuildEgressNetworkPolicy_InvalidPortsSkipped(t *testing.T) {
 }
 
 func TestBuildIngressFromGatewayNetworkPolicy(t *testing.T) {
-	ws := minimalWorkspace()
-	np, err := BuildIngressFromGatewayNetworkPolicy(ws, scheme)
-	if err != nil {
-		t.Fatalf("BuildIngressFromGatewayNetworkPolicy: %v", err)
-	}
+	t.Run("cross-namespace (gatewayNamespace set)", func(t *testing.T) {
+		ws := minimalWorkspace()
+		np, err := BuildIngressFromGatewayNetworkPolicy(ws, "workspace-operator-system", scheme)
+		if err != nil {
+			t.Fatalf("BuildIngressFromGatewayNetworkPolicy: %v", err)
+		}
 
-	if np.Name != "alice-workspace-ingress-gateway" {
-		t.Errorf("Name = %q, want alice-workspace-ingress-gateway", np.Name)
-	}
+		if np.Name != "alice-workspace-ingress-gateway" {
+			t.Errorf("Name = %q, want alice-workspace-ingress-gateway", np.Name)
+		}
 
-	// Must only declare Ingress.
-	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
-		t.Errorf("PolicyTypes = %v, want [Ingress]", np.Spec.PolicyTypes)
-	}
+		// Must only declare Ingress.
+		if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+			t.Errorf("PolicyTypes = %v, want [Ingress]", np.Spec.PolicyTypes)
+		}
 
-	if len(np.Spec.Ingress) != 1 {
-		t.Fatalf("Ingress rules = %d, want 1", len(np.Spec.Ingress))
-	}
-	rule := np.Spec.Ingress[0]
+		if len(np.Spec.Ingress) != 1 {
+			t.Fatalf("Ingress rules = %d, want 1", len(np.Spec.Ingress))
+		}
+		rule := np.Spec.Ingress[0]
 
-	// Must restrict to ttyd port.
-	if len(rule.Ports) != 1 || rule.Ports[0].Port.IntVal != 7681 {
-		t.Errorf("Ingress port = %v, want 7681", rule.Ports)
-	}
+		// Must restrict to ttyd port.
+		if len(rule.Ports) != 1 || rule.Ports[0].Port.IntVal != 7681 {
+			t.Errorf("Ingress port = %v, want 7681", rule.Ports)
+		}
 
-	// Must allow only from gateway pods.
-	if len(rule.From) != 1 {
-		t.Fatalf("From peers = %d, want 1", len(rule.From))
-	}
-	ps := rule.From[0].PodSelector
-	if ps == nil || ps.MatchLabels["app"] != labelGatewayApp {
-		t.Errorf("From PodSelector = %v, want app=%s", ps, labelGatewayApp)
-	}
+		// Must allow only from gateway pods.
+		if len(rule.From) != 1 {
+			t.Fatalf("From peers = %d, want 1", len(rule.From))
+		}
+		peer := rule.From[0]
+		ps := peer.PodSelector
+		if ps == nil || ps.MatchLabels["app"] != labelGatewayApp {
+			t.Errorf("From PodSelector = %v, want app=%s", ps, labelGatewayApp)
+		}
+		// Cross-namespace: NamespaceSelector must be set and target the gateway namespace.
+		ns := peer.NamespaceSelector
+		if ns == nil {
+			t.Fatal("NamespaceSelector must be set when gatewayNamespace is non-empty")
+		}
+		if ns.MatchLabels["kubernetes.io/metadata.name"] != "workspace-operator-system" {
+			t.Errorf("NamespaceSelector label = %v, want workspace-operator-system", ns.MatchLabels)
+		}
+	})
+
+	t.Run("same-namespace fallback (gatewayNamespace empty)", func(t *testing.T) {
+		ws := minimalWorkspace()
+		np, err := BuildIngressFromGatewayNetworkPolicy(ws, "", scheme)
+		if err != nil {
+			t.Fatalf("BuildIngressFromGatewayNetworkPolicy: %v", err)
+		}
+
+		rule := np.Spec.Ingress[0]
+		if len(rule.From) != 1 {
+			t.Fatalf("From peers = %d, want 1", len(rule.From))
+		}
+		peer := rule.From[0]
+		ps := peer.PodSelector
+		if ps == nil || ps.MatchLabels["app"] != labelGatewayApp {
+			t.Errorf("From PodSelector = %v, want app=%s", ps, labelGatewayApp)
+		}
+		// No NamespaceSelector — falls back to same-namespace matching.
+		if peer.NamespaceSelector != nil {
+			t.Errorf("NamespaceSelector must be nil when gatewayNamespace is empty, got %v", peer.NamespaceSelector)
+		}
+	})
 }
 
 // ── RBAC tests ────────────────────────────────────────────────────────────────

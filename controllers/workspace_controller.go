@@ -41,6 +41,12 @@ type WorkspaceReconciler struct {
 	// updated) before its pod is deleted and the workspace is set to Stopped.
 	// Zero disables the idle check.
 	IdleTimeout time.Duration
+	// GatewayNamespace is the namespace where gateway pods run (e.g.
+	// "workspace-operator-system").  It is used to add a cross-namespace
+	// NamespaceSelector to the ingress-gateway NetworkPolicy so that the
+	// deny-all policy does not silently block gateway traffic.  When empty,
+	// the NetworkPolicy falls back to same-namespace-only matching.
+	GatewayNamespace string
 }
 
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
@@ -412,7 +418,7 @@ func (r *WorkspaceReconciler) ensureNetworkPolicies(ctx context.Context, ws *wor
 	}
 
 	// Ingress-from-gateway (static spec — allow ttyd traffic from gateway pods).
-	ingressGw, err := security.BuildIngressFromGatewayNetworkPolicy(ws, r.Scheme)
+	ingressGw, err := security.BuildIngressFromGatewayNetworkPolicy(ws, r.GatewayNamespace, r.Scheme)
 	if err != nil {
 		return fmt.Errorf("build ingress-gateway NetworkPolicy: %w", err)
 	}

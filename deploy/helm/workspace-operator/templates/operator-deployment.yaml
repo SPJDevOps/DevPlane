@@ -43,6 +43,8 @@ spec:
         - name: IDLE_TIMEOUT
           value: {{ .Values.workspace.idleTimeout | quote }}
         {{- end }}
+        - name: GATEWAY_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

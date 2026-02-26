@@ -108,13 +108,22 @@ func main() {
 		}
 	}
 
+	// GATEWAY_NAMESPACE is the namespace where gateway pods run.  It is used to
+	// add a cross-namespace NamespaceSelector to the ingress-gateway
+	// NetworkPolicy so that deny-all does not silently block gateway traffic.
+	gatewayNamespace := os.Getenv("GATEWAY_NAMESPACE")
+	if gatewayNamespace == "" {
+		setupLog.Info("GATEWAY_NAMESPACE not set; ingress-gateway NetworkPolicy will only allow gateway pods in the workspace namespace")
+	}
+
 	if err = (&controllers.WorkspaceReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		WorkspaceImage: workspaceImage,
-		LLMNamespaces:  llmNamespaces,
-		EgressPorts:    egressPorts,
-		IdleTimeout:    idleTimeout,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		WorkspaceImage:   workspaceImage,
+		LLMNamespaces:    llmNamespaces,
+		EgressPorts:      egressPorts,
+		IdleTimeout:      idleTimeout,
+		GatewayNamespace: gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller", "controller", "Workspace")
 		os.Exit(1)
