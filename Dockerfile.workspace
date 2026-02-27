@@ -36,10 +36,12 @@ RUN curl -fsSL "https://github.com/derailed/k9s/releases/download/v${K9S_VERSION
         | tar -xz -C /usr/local/bin k9s
 
 # ── oc (OpenShift / OKD CLI) ──────────────────────────────────────────────────
-# Filename uses amd64/arm64 directly matching TARGETARCH (OCP 4.14+ naming).
+# Mirror naming: amd64 → openshift-client-linux.tar.gz (no arch suffix),
+#                arm64 → openshift-client-linux-arm64.tar.gz.
 # Extracts only 'oc'; our pinned kubectl is kept to avoid version drift.
-RUN curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux-${TARGETARCH}.tar.gz" \
-        | tar -xz -C /usr/local/bin oc \
+RUN OC_ARCH=$([ "${TARGETARCH}" = "amd64" ] && echo "" || echo "-${TARGETARCH}") \
+    && curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux${OC_ARCH}.tar.gz" \
+       | tar -xz -C /usr/local/bin oc \
     && chmod +x /usr/local/bin/oc
 
 # ── Go ───────────────────────────────────────────────────────────────────────
