@@ -36,7 +36,7 @@ jobs:
       # fetch-depth: 0 is required so chart-releaser can diff chart versions
       # across the full commit history.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
