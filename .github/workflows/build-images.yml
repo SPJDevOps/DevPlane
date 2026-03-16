@@ -50,11 +50,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # QEMU + Buildx are required for multi-platform (arm64) builds.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -71,7 +71,7 @@ jobs:
       #   v* tag       → semver tags (v0.1.0, 0.1, 0) + latest
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           # github.repository = "SPJDevOps/DevPlane"; metadata-action lowercases it automatically.
           # Result: ghcr.io/spjdevops/devplane/<image-name>
@@ -86,7 +86,7 @@ jobs:
 
       - name: Build and push image
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
