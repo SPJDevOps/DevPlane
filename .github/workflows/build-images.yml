@@ -71,7 +71,7 @@ jobs:
       #   v* tag       → semver tags (v0.1.0, 0.1, 0) + latest
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           # github.repository = "SPJDevOps/DevPlane"; metadata-action lowercases it automatically.
           # Result: ghcr.io/spjdevops/devplane/<image-name>
