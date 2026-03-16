@@ -74,6 +74,11 @@ export HISTSIZE=10000
 export SAVEHIST=10000
 setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE
 
+# ── Aliases ───────────────────────────────────────────────────────────────────
+alias ll='ls -la'
+alias la='ls -la'
+alias l='ls -CF'
+
 # ── Useful zsh options ────────────────────────────────────────────────────────
 setopt AUTO_CD
 setopt CORRECT
@@ -230,4 +235,7 @@ fi
 # ── ttyd ──────────────────────────────────────────────────────────────────────
 # exec replaces this process; ttyd serves the tmux attach command over
 # WebSocket on port 7681.  --writable allows keyboard input from the browser.
-exec ttyd --port 7681 --writable tmux attach-session -t workspace
+# -t fontFamily: use Unicode-capable monospace fonts so OpenCode logo renders.
+exec ttyd --port 7681 --writable \
+  -t 'fontFamily=JetBrains Mono, Fira Code, Cascadia Code, Monaco, Menlo, Consolas, monospace' \
+  tmux attach-session -t workspace

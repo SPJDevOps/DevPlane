@@ -4,14 +4,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -211,6 +214,38 @@ const loadingPageTmpl = `<!DOCTYPE html>
 
 var loadingTmpl = template.Must(template.New("loading").Parse(loadingPageTmpl))
 
+// fullWidthTerminalCSS is injected into proxied ttyd HTML so the terminal
+// container fills the browser viewport (fixes narrow layout).
+const fullWidthTerminalCSS = `<style>html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden;box-sizing:border-box}body>div,#terminal{width:100%!important;height:100%!important;margin:0!important;padding:0!important;box-sizing:border-box}</style>`
+
+// injectFullWidthTerminalCSS is a ModifyResponse that injects full-width CSS
+// into ttyd index.html so the terminal uses the full browser width.
+func injectFullWidthTerminalCSS(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	headClose := []byte("</head>")
+	if !bytes.Contains(body, headClose) {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+	injected := bytes.Replace(body, headClose, []byte(fullWidthTerminalCSS+string(headClose)), 1)
+	resp.Body = io.NopCloser(bytes.NewReader(injected))
+	resp.ContentLength = int64(len(injected))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(injected)))
+	resp.Header.Del("Transfer-Encoding")
+	return nil
+}
+
 type loadingPageData struct {
 	DisplayName string
 	Phase       string
@@ -359,6 +394,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request,
 			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint, "error", err.Error())
 		serveLoadingPage(w, r, displayName, string(ws.Status.Phase))
 	}
+	rp.ModifyResponse = injectFullWidthTerminalCSS
 	rp.ServeHTTP(w, r)
 }
 
@@ -390,6 +426,17 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		http.Error(w, "Failed to provision workspace", http.StatusInternalServerError)
 		log.Error(err, "EnsureWorkspace failed", "user", claims.UserID)
+		return
+	}
+
+	// Check that the backend ttyd server is actually accepting connections
+	// before proxying.  If the pod is Running but ttyd hasn't started yet,
+	// serve a loading page so the user gets a clean "workspace starting"
+	// experience instead of a WebSocket dial error.
+	if !gw.BackendReady(ws.Status.ServiceEndpoint) {
+		log.Info("Backend not ready yet, returning 503",
+			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint)
+		http.Error(w, "Workspace not ready", http.StatusServiceUnavailable)
 		return
 	}
 

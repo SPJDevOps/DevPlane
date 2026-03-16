@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -19,7 +20,8 @@ const (
 var upgrader = websocket.Upgrader{
 	HandshakeTimeout: 10 * time.Second,
 	// Origin validation is handled by the OIDC auth layer before we get here.
-	CheckOrigin: func(_ *http.Request) bool { return true },
+	CheckOrigin:  func(_ *http.Request) bool { return true },
+	Subprotocols: []string{"tty"},
 }
 
 // Proxy upgrades an HTTP request to WebSocket and bidirectionally proxies
@@ -49,7 +51,11 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	dialCtx, dialCancel := context.WithTimeout(r.Context(), backendDialTimeout)
 	defer dialCancel()
 
-	backendConn, _, err := websocket.DefaultDialer.DialContext(dialCtx, backendURL, nil)
+	var backendHeaders http.Header
+	if subproto := clientConn.Subprotocol(); subproto != "" {
+		backendHeaders = http.Header{"Sec-WebSocket-Protocol": []string{subproto}}
+	}
+	backendConn, _, err := websocket.DefaultDialer.DialContext(dialCtx, backendURL, backendHeaders)
 	if err != nil {
 		return fmt.Errorf("dial backend %q: %w", backendURL, err)
 	}
@@ -100,4 +106,21 @@ func copyFrames(dst, src *websocket.Conn, errc chan<- error, onActivity func()) 
 			onActivity()
 		}
 	}
+}
+
+// backendReadyTimeout is the maximum time to wait for a TCP connection to the backend.
+const backendReadyTimeout = 5 * time.Second
+
+// BackendReady performs a quick TCP dial to serviceEndpoint:7681 to check
+// whether the workspace pod's ttyd server is accepting connections.
+// This avoids proxying a WebSocket dial that would hang or fail when the
+// pod is running but the ttyd process hasn't started yet.
+func BackendReady(serviceEndpoint string) bool {
+	addr := net.JoinHostPort(serviceEndpoint, fmt.Sprintf("%d", ttydPort))
+	conn, err := net.DialTimeout("tcp", addr, backendReadyTimeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

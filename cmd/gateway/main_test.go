@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -388,12 +390,27 @@ func TestHandleWS_WorkspaceProvisionFails(t *testing.T) {
 // succeeds (stopped workspace was cleared and re-provisioned by the lifecycle
 // manager), the gateway proceeds to proxy rather than returning 500.
 func TestHandleWS_StoppedWorkspaceRecovery(t *testing.T) {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", 7681))
+	if err != nil {
+		t.Skipf("cannot bind to port 7681 (likely in use): %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
 	w := httptest.NewRecorder()
 
 	v := &stubValidator{claims: &gw.Claims{Sub: "u1", Email: "u1@test.com", UserID: "u1"}}
 	ws := &workspacev1alpha1.Workspace{}
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
-	ws.Status.ServiceEndpoint = "u1-workspace-svc.default.svc.cluster.local"
+	ws.Status.ServiceEndpoint = "127.0.0.1"
 	// EnsureWorkspace succeeds (lifecycle manager internally restarted the stopped workspace).
 	lc := &stubLifecycle{ws: ws}
 	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
@@ -405,18 +422,49 @@ func TestHandleWS_StoppedWorkspaceRecovery(t *testing.T) {
 }
 
 func TestHandleWS_HappyPath(t *testing.T) {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", 7681))
+	if err != nil {
+		t.Skipf("cannot bind to port 7681 (likely in use): %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
 	w := httptest.NewRecorder()
 
 	v := &stubValidator{claims: &gw.Claims{Sub: "u2", Email: "u2@test.com", UserID: "u2"}}
 	ws := &workspacev1alpha1.Workspace{}
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
-	ws.Status.ServiceEndpoint = "u2-workspace-svc.default.svc.cluster.local"
+	ws.Status.ServiceEndpoint = "127.0.0.1"
 	lc := &stubLifecycle{ws: ws}
 	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
 
 	// stubProxy writes 101; no 4xx or 5xx from handleWS itself.
 	if w.Code >= 400 {
 		t.Errorf("status = %d, expected successful proxy", w.Code)
+	}
+}
+
+func TestHandleWS_BackendNotReady_Returns503(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	v := &stubValidator{claims: &gw.Claims{Sub: "u3", Email: "u3@test.com", UserID: "u3"}}
+	ws := &workspacev1alpha1.Workspace{}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+	// 127.0.0.1:7681 not listening → BackendReady returns false immediately.
+	ws.Status.ServiceEndpoint = "127.0.0.1"
+	lc := &stubLifecycle{ws: ws}
+	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
 	}
 }
 

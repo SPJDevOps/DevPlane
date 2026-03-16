@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,6 +148,75 @@ func TestServeWS(t *testing.T) {
 	}
 }
 
+// TestServeWS_SubprotocolForwarded verifies that when the client requests the
+// "tty" subprotocol, the gateway echoes it back to the client and forwards it
+// to the backend. A backend that rejects connections missing the subprotocol
+// is used so that missing forwarding causes a dial error rather than silent
+// data loss.
+func TestServeWS_SubprotocolForwarded(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true))
+	proxy := NewProxy(log)
+
+	// Backend: only accepts connections that negotiate "tty"; rejects others.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := websocket.Upgrader{
+			CheckOrigin:  func(_ *http.Request) bool { return true },
+			Subprotocols: []string{"tty"},
+		}
+		// If the client didn't request "tty", reject with 400.
+		if websocket.Subprotocols(r)[0] != "tty" {
+			http.Error(w, "missing tty subprotocol", http.StatusBadRequest)
+			return
+		}
+		conn, err := u.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Echo one message then close.
+		mt, msg, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		_ = conn.WriteMessage(mt, msg)
+	}))
+	defer backend.Close()
+	backendWSURL := "ws" + strings.TrimPrefix(backend.URL, "http")
+
+	// Frontend: proxies to backend via ServeWS.
+	frontend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := proxy.ServeWS(w, r, backendWSURL, nil); err != nil {
+			t.Logf("ServeWS: %v", err)
+		}
+	}))
+	defer frontend.Close()
+
+	// Client dials the frontend requesting the "tty" subprotocol.
+	d := websocket.Dialer{Subprotocols: []string{"tty"}}
+	conn, _, err := d.Dial("ws"+strings.TrimPrefix(frontend.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial frontend proxy: %v", err)
+	}
+	defer conn.Close()
+
+	// Gateway must echo the subprotocol back to the client.
+	if got := conn.Subprotocol(); got != "tty" {
+		t.Errorf("client subprotocol = %q, want tty", got)
+	}
+
+	// Data must flow end-to-end (proves backend accepted the subprotocol).
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("tty-hello")); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+	_, got, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	if string(got) != "tty-hello" {
+		t.Errorf("echoed = %q, want tty-hello", got)
+	}
+}
+
 func TestBackendURL(t *testing.T) {
 	tests := []struct {
 		endpoint string
@@ -220,5 +291,37 @@ func TestCopyFrames(t *testing.T) {
 	}
 	if string(got) != string(msg) {
 		t.Errorf("echo = %q, want %q", got, msg)
+	}
+}
+
+func TestBackendReady(t *testing.T) {
+	// BackendReady always dials port 7681, so we must listen on that port.
+	// Use 127.0.0.1 to avoid binding to a wildcard address.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ttydPort))
+	if err != nil {
+		t.Skipf("cannot bind to port %d (likely in use): %v", ttydPort, err)
+	}
+	defer ln.Close()
+
+	// Accept and close connections in the background so BackendReady's
+	// dial succeeds (net.DialTimeout completes once TCP handshake finishes).
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	endpoint := "127.0.0.1"
+	if !BackendReady(endpoint) {
+		t.Errorf("BackendReady(%q) = false, want true (listener is accepting)", endpoint)
+	}
+
+	// Unreachable endpoint should return false.
+	if BackendReady("192.0.2.1") {
+		t.Error("BackendReady(unreachable) = true, want false")
 	}
 }

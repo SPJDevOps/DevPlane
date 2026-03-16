@@ -438,17 +438,20 @@ func (r *WorkspaceReconciler) ensureNetworkPolicies(ctx context.Context, ws *wor
 	return nil
 }
 
-// updateStatus sets the Workspace status and updates via the status subresource.
+// updateStatus sets the Workspace status fields and patches via the status
+// subresource.  Patch is used instead of Update to avoid clobbering fields
+// owned by other controllers (e.g. the gateway writes LastAccessed).
 func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1alpha1.Workspace, phase workspacev1alpha1.WorkspacePhase, podName, serviceEndpoint, message, messageOverride string) error {
 	msg := message
 	if messageOverride != "" {
 		msg = messageOverride
 	}
+	base := ws.DeepCopy()
 	ws.Status.Phase = phase
 	ws.Status.PodName = podName
 	ws.Status.ServiceEndpoint = serviceEndpoint
 	ws.Status.Message = msg
-	return r.Status().Update(ctx, ws)
+	return r.Status().Patch(ctx, ws, client.MergeFrom(base))
 }
 
 // isPodReady returns true if the pod has a Ready condition that is true.
