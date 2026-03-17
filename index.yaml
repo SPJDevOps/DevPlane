@@ -2,6 +2,21 @@ apiVersion: v1
 entries:
   workspace-operator:
   - apiVersion: v2
+    appVersion: 1.1.5
+    created: "2026-03-17T18:40:15.994697136Z"
+    description: AI-powered development workspaces for air-gapped environments
+    digest: 93328d9c546caa9eeb53f87f66d5d744c4626913b1da3c1f0659097d3496f55c
+    keywords:
+    - workspace
+    - kubernetes
+    - operator
+    - ai
+    name: workspace-operator
+    type: application
+    urls:
+    - https://github.com/SPJDevOps/DevPlane/releases/download/workspace-operator-1.1.5/workspace-operator-1.1.5.tgz
+    version: 1.1.5
+  - apiVersion: v2
     appVersion: 1.1.4
     created: "2026-03-16T19:03:33.85527493Z"
     description: AI-powered development workspaces for air-gapped environments
@@ -91,4 +106,4 @@ entries:
     urls:
     - https://github.com/SPJDevOps/DevPlane/releases/download/workspace-operator-1.0.0/workspace-operator-1.0.0.tgz
     version: 1.0.0
-generated: "2026-03-16T19:03:33.855299199Z"
+generated: "2026-03-17T18:40:15.994735293Z"
