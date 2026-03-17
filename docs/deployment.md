@@ -66,7 +66,7 @@ Available chart versions: [index.yaml](https://spjdevops.github.io/DevPlane/inde
 
 ```bash
 REGISTRY=registry.example.com/devplane
-VERSION=1.0.0
+VERSION=1.1.5
 
 for img in workspace-operator workspace-gateway workspace; do
   docker pull ghcr.io/spjdevops/devplane/${img}:${VERSION}
@@ -96,7 +96,7 @@ Install (quick start, public cluster):
 
 ```bash
 helm install workspace-operator devplane/workspace-operator \
-  --version 1.0.0 \
+  --version 1.1.5 \
   --namespace workspace-operator-system \
   --create-namespace \
   --set gateway.oidc.issuerURL=https://idp.example.com \
@@ -113,14 +113,14 @@ Using a values file (recommended for production):
 operator:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-operator
-    tag: "1.0.0"
+    tag: "1.1.5"
   replicas: 1
   leaderElect: true
 
 gateway:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-gateway
-    tag: "1.0.0"
+    tag: "1.1.5"
   replicas: 2
   workspaceNamespace: "workspaces"
   createWorkspaceNamespace: true
@@ -139,7 +139,7 @@ gateway:
 workspace:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace
-    tag: "1.0.0"
+    tag: "1.1.5"
   defaultResources:
     cpu: "2"
     memory: "4Gi"
@@ -157,7 +157,7 @@ workspace:
 
 ```bash
 helm install workspace-operator devplane/workspace-operator \
-  --version 1.0.0 \
+  --version 1.1.5 \
   -n workspace-operator-system --create-namespace \
   -f my-values.yaml
 ```
@@ -168,15 +168,15 @@ helm install workspace-operator devplane/workspace-operator \
 operator:
   image:
     repository: registry.example.com/devplane/workspace-operator
-    tag: "1.0.0"
+    tag: "1.1.5"
 gateway:
   image:
     repository: registry.example.com/devplane/workspace-gateway
-    tag: "1.0.0"
+    tag: "1.1.5"
 workspace:
   image:
     repository: registry.example.com/devplane/workspace
-    tag: "1.0.0"
+    tag: "1.1.5"
 ```
 
 ### 3. OIDC configuration
@@ -296,18 +296,27 @@ The Helm chart mounts the ConfigMap at `/etc/ssl/certs/custom` inside the gatewa
 
 ### 3. Configure workspace pods to trust the CA
 
-Workspace pods are configured per-workspace via `spec.tls.customCABundle` on the Workspace CR. You can set a cluster-wide default by adding it to the operator's default workspace spec in `values.yaml`, or set it per-user workspace.
+There are two ways to inject a CA bundle into workspace pods. Option A is recommended for most clusters — it requires no per-CR config.
 
-**Option A — operator-wide default via values.yaml:**
+**Option A — operator-wide default via `workspace.defaultCABundle` (recommended):**
 
-The Workspace CR created by the gateway inherits the operator's configured defaults. To have all workspace pods trust the CA, create a matching ConfigMap in the `workspaces` namespace and reference it in every Workspace CR, or set it as the default in your provisioning flow.
+Create the ConfigMap in the `workspaces` namespace and set one Helm value. Every workspace pod will automatically mount it, regardless of how the Workspace CR was created.
 
 ```bash
-# Mirror the ConfigMap into the workspaces namespace
+# Create the ConfigMap in the workspaces namespace
 kubectl create configmap devplane-ca-bundle \
   --from-file=ca.crt=/path/to/your-ca.crt \
   -n workspaces
 ```
+
+```yaml
+# values.yaml
+workspace:
+  defaultCABundle:
+    configMapName: devplane-ca-bundle   # ConfigMap in the workspaces namespace
+```
+
+Individual Workspace CRs can still override this via `spec.tls.customCABundle`; the per-CR setting takes precedence when both are configured.
 
 **Option B — per-workspace Workspace CR:**
 
@@ -338,23 +347,23 @@ spec:
 
 ### What happens inside the workspace pod
 
-The entrypoint script detects `CUSTOM_CA_MOUNTED=true` (set automatically by the operator when `spec.tls.customCABundle` is configured) and merges the custom certs with the system trust store:
+The entrypoint always exports CA environment variables pointing at a known trust store. When a custom CA is mounted (`CUSTOM_CA_MOUNTED=true`), it first merges the custom certs with the system store:
 
 ```
 /etc/ssl/certs/ca-certificates.crt  (system)
-/etc/ssl/certs/custom/*.crt         (your CA(s))
-/etc/ssl/certs/custom/*.pem         ──► /tmp/ca-bundle.crt
+/etc/ssl/certs/custom/*.crt         (your CA(s))   ──► /tmp/ca-bundle.crt
+/etc/ssl/certs/custom/*.pem         (your CA(s))
 ```
 
-The following environment variables are then exported so every tool in the workspace trusts the CA without any manual steps:
+When no custom CA is mounted, the standard system bundle (`/etc/ssl/certs/ca-certificates.crt`) is used instead. Either way, the following variables are always exported so every tool trusts the correct store without any manual configuration:
 
 | Variable | Used by |
 |----------|---------|
 | `SSL_CERT_FILE` | Go binaries (opencode, custom tools) |
-| `REQUESTS_CA_BUNDLE` | Python `requests` / `httpx` |
+| `REQUESTS_CA_BUNDLE` | Python `requests`, `httpx`, `boto3`, `pip` |
+| `CURL_CA_BUNDLE` | `curl` |
+| `GIT_SSL_CAINFO` | `git` (HTTPS remotes) |
 | `NODE_EXTRA_CA_CERTS` | Node.js / npm |
-
-`curl`, `git`, and `wget` use the system store which is updated via `update-ca-certificates` by the same bundle file.
 
 ### Typical Keycloak setup
 
@@ -367,6 +376,10 @@ gateway:
   tls:
     customCABundle:
       configMapName: devplane-ca-bundle   # in workspace-operator-system namespace
+
+workspace:
+  defaultCABundle:
+    configMapName: devplane-ca-bundle     # in workspaces namespace
 ```
 
 ```bash
@@ -380,6 +393,59 @@ kubectl create configmap devplane-ca-bundle \
   --from-file=ca.crt=/path/to/internal-ca.crt \
   -n workspaces
 ```
+
+---
+
+## Package Mirror Configuration (pip and npm)
+
+In air-gapped environments, `pip install` and `npm install` must reach an internal proxy (Nexus, Artifactory, Devpi, Verdaccio, etc.) instead of the public registries. Set these once in Helm and every workspace pod gets the correct environment variables automatically — no per-user configuration required.
+
+### pip
+
+```yaml
+workspace:
+  packageMirrors:
+    pip:
+      indexUrl: "https://nexus.example.com/repository/pypi-proxy/simple"
+      trustedHost: "nexus.example.com"   # only needed for self-signed certs
+```
+
+These map directly to pip's native environment variables `PIP_INDEX_URL` and `PIP_TRUSTED_HOST`, which pip reads before any `pip.conf`. The `trustedHost` setting is only required when the mirror uses a certificate that is **not** covered by your CA bundle — for example, a plain HTTP endpoint or a host with a self-signed cert that you haven't added to the bundle.
+
+If your mirror is reachable over HTTPS and your CA bundle already trusts it, you can omit `trustedHost`:
+
+```yaml
+workspace:
+  packageMirrors:
+    pip:
+      indexUrl: "https://nexus.example.com/repository/pypi-proxy/simple"
+```
+
+### npm
+
+```yaml
+workspace:
+  packageMirrors:
+    npm:
+      registry: "https://nexus.example.com/repository/npm-proxy"
+```
+
+This sets `npm_config_registry` in the workspace pod environment. npm (and opencode's dependency installer) reads this variable before any `.npmrc` file, so it works without touching user home directories.
+
+### Combined air-gapped example
+
+```yaml
+workspace:
+  defaultCABundle:
+    configMapName: devplane-ca-bundle
+  packageMirrors:
+    pip:
+      indexUrl: "https://nexus.internal.example.com/repository/pypi-proxy/simple"
+    npm:
+      registry: "https://nexus.internal.example.com/repository/npm-proxy"
+```
+
+> If your Nexus/Artifactory instance uses a certificate signed by your internal CA, add that CA to `workspace.defaultCABundle` — pip and npm will pick it up via `REQUESTS_CA_BUNDLE` and `NODE_EXTRA_CA_CERTS` respectively, so you won't need `pip.trustedHost`.
 
 ---
 
@@ -440,6 +506,11 @@ Similarly, `workspace.ai.egressNamespaces` and `workspace.ai.egressPorts` in `va
 | `workspace.ai.providers` | list | see below | List of AI provider backends. Each entry requires `name` (opencode provider key), `endpoint` (OpenAI-compatible base URL), and `models` (list of model IDs). At least one provider must be specified. Example: `[{name: local, endpoint: "http://vllm.ai-system.svc:8000", models: [deepseek-coder-33b-instruct]}]` |
 | `workspace.ai.egressNamespaces` | string | `ai-system` | Comma-separated in-cluster namespaces whose pods workspace pods may reach on any port (LLM services) |
 | `workspace.ai.egressPorts` | string | `22,80,443,5000,8000,8080,8081,11434` | Comma-separated TCP ports allowed for egress to external IPs. Covers SSH (22), HTTP/HTTPS (80/443), Docker registry (5000), vLLM (8000), Nexus/Artifactory (8080/8081), Ollama (11434). Override to suit your environment. |
+| `workspace.idleTimeout` | string | `24h` | How long a Running workspace may be idle before its pod is stopped. Go duration syntax (`24h`, `8h30m`). Leave empty to disable. |
+| `workspace.defaultCABundle.configMapName` | string | `""` | Name of a ConfigMap **in the workspaces namespace** containing PEM-encoded CA certificates. Mounted in all workspace pods when set. Individual Workspace CRs can still override this via `spec.tls.customCABundle`. |
+| `workspace.packageMirrors.pip.indexUrl` | string | `""` | Sets `PIP_INDEX_URL` in every workspace pod. Use the full simple-index URL of your internal PyPI mirror, e.g. `https://nexus.example.com/repository/pypi-proxy/simple`. |
+| `workspace.packageMirrors.pip.trustedHost` | string | `""` | Sets `PIP_TRUSTED_HOST` in every workspace pod. Hostname only (no scheme). Only required when the pip mirror uses a certificate not covered by the CA bundle (e.g. plain HTTP or an untrusted self-signed cert). |
+| `workspace.packageMirrors.npm.registry` | string | `""` | Sets `npm_config_registry` in every workspace pod. Full URL of your internal npm registry, e.g. `https://nexus.example.com/repository/npm-proxy`. |
 
 ---
 

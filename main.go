@@ -116,6 +116,11 @@ func main() {
 		setupLog.Info("GATEWAY_NAMESPACE not set; ingress-gateway NetworkPolicy will only allow gateway pods in the workspace namespace")
 	}
 
+	defaultCABundle := os.Getenv("DEFAULT_CA_BUNDLE_CONFIGMAP")
+	pipIndexURL := os.Getenv("PIP_INDEX_URL")
+	pipTrustedHost := os.Getenv("PIP_TRUSTED_HOST")
+	npmRegistry := os.Getenv("NPM_REGISTRY")
+
 	if err = (&controllers.WorkspaceReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -124,6 +129,10 @@ func main() {
 		EgressPorts:      egressPorts,
 		IdleTimeout:      idleTimeout,
 		GatewayNamespace: gatewayNamespace,
+		DefaultCABundle:  defaultCABundle,
+		PipIndexURL:      pipIndexURL,
+		PipTrustedHost:   pipTrustedHost,
+		NpmRegistry:      npmRegistry,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller", "controller", "Workspace")
 		os.Exit(1)

@@ -33,7 +33,8 @@ Platform and infra teams get an equally important benefit: **developer access is
 - **Infra-team governance by default** — egress ports, reachable in-cluster namespaces, and resource limits are all set centrally by your platform team and enforced as Kubernetes NetworkPolicies and ResourceQuotas; developers cannot exceed or work around them. OIDC identity means no SSH key sprawl and instant access revocation when someone leaves the team.
 - **Hardened pod security** — non-root (`UID 1000`), read-only root filesystem, all capabilities dropped, `seccompProfile: RuntimeDefault`, no privileged mode
 - **Air-gap ready** — mirror three images to your internal registry, point the Helm values at them, done
-- **Private CA support** — mount a CA bundle once in Helm; it propagates to both the gateway (OIDC validation) and every workspace pod (git, curl, npm, Python requests)
+- **Private CA support** — set `workspace.defaultCABundle.configMapName` once in Helm; every workspace pod automatically trusts it (`curl`, `git`, Python `requests`/`boto3`, Node.js/npm), in addition to the system store
+- **Package mirror support** — configure pip and npm to use an internal Nexus/Artifactory proxy via `workspace.packageMirrors`; no per-user configuration needed
 - **Multi-arch images** — `linux/amd64` + `linux/arm64` published to GHCR for every release
 
 ---
@@ -102,7 +103,7 @@ helm repo add devplane https://spjdevops.github.io/DevPlane
 helm repo update
 
 helm install workspace-operator devplane/workspace-operator \
-  --version 1.1.2 \
+  --version 1.1.5 \
   --namespace workspace-operator-system \
   --create-namespace \
   --set gateway.oidc.issuerURL=https://idp.example.com \
@@ -134,7 +135,7 @@ Mirror the three images to your internal registry before installing:
 
 ```bash
 REGISTRY=registry.example.com/devplane
-VERSION=1.1.2
+VERSION=1.1.5
 
 for img in workspace-operator workspace-gateway workspace; do
   docker pull ghcr.io/spjdevops/devplane/${img}:${VERSION}
@@ -149,15 +150,15 @@ Then override in your values file:
 operator:
   image:
     repository: registry.example.com/devplane/workspace-operator
-    tag: "1.1.2"
+    tag: "1.1.5"
 gateway:
   image:
     repository: registry.example.com/devplane/workspace-gateway
-    tag: "1.1.2"
+    tag: "1.1.5"
 workspace:
   image:
     repository: registry.example.com/devplane/workspace
-    tag: "1.1.2"
+    tag: "1.1.5"
 ```
 
 ---
@@ -168,9 +169,9 @@ Multi-arch (`linux/amd64` + `linux/arm64`) images are published to GHCR on every
 
 | Image | Pull reference |
 |-------|----------------|
-| Operator  | `ghcr.io/spjdevops/devplane/workspace-operator:1.1.2` |
-| Gateway   | `ghcr.io/spjdevops/devplane/workspace-gateway:1.1.2`  |
-| Workspace | `ghcr.io/spjdevops/devplane/workspace:1.1.2`          |
+| Operator  | `ghcr.io/spjdevops/devplane/workspace-operator:1.1.5` |
+| Gateway   | `ghcr.io/spjdevops/devplane/workspace-gateway:1.1.5`  |
+| Workspace | `ghcr.io/spjdevops/devplane/workspace:1.1.5`          |
 
 Helm chart: [https://spjdevops.github.io/DevPlane](https://spjdevops.github.io/DevPlane) — [index.yaml](https://spjdevops.github.io/DevPlane/index.yaml) · [GitHub Releases](https://github.com/SPJDevOps/DevPlane/releases)
 
@@ -200,13 +201,41 @@ workspace:
 
 ### Private CA certificates
 
-If your IdP or internal services use a private CA, create a ConfigMap with the PEM bundle and reference it in values — the chart mounts it in the gateway and the operator propagates it to every workspace pod automatically:
+If your IdP or internal services use a private CA, create a ConfigMap with the PEM bundle and reference it in values. The chart mounts it in the gateway for OIDC validation, and the operator mounts it in every workspace pod so that `curl`, `git`, Python (`requests`, `boto3`), and Node.js/npm all trust it automatically.
+
+```bash
+# Gateway namespace (for OIDC validation in the gateway)
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/ca.crt -n workspace-operator-system
+
+# Workspaces namespace (for workspace pods)
+kubectl create configmap devplane-ca-bundle \
+  --from-file=ca.crt=/path/to/ca.crt -n workspaces
+```
 
 ```yaml
 gateway:
   tls:
     customCABundle:
       configMapName: devplane-ca-bundle   # namespace: workspace-operator-system
+
+workspace:
+  defaultCABundle:
+    configMapName: devplane-ca-bundle     # namespace: workspaces
+```
+
+### Package mirrors (pip and npm)
+
+For air-gapped clusters, point pip and npm at your internal proxy — set once in Helm, applied to every workspace pod automatically:
+
+```yaml
+workspace:
+  packageMirrors:
+    pip:
+      indexUrl: "https://nexus.example.com/repository/pypi-proxy/simple"
+      trustedHost: "nexus.example.com"   # only if not covered by your CA bundle
+    npm:
+      registry: "https://nexus.example.com/repository/npm-proxy"
 ```
 
 See [docs/deployment.md](./docs/deployment.md) for the full values reference, production hardening checklist, upgrade/rollback notes, and observability setup.
@@ -238,6 +267,8 @@ Override per-cluster (`workspace.ai.egressPorts` in values) or per-workspace (`s
 | Workspace can't reach LLM | Ensure LLM namespace is in `egressNamespaces`; check NetworkPolicy with `kubectl get netpol -n workspaces` |
 | Workspace can't reach external service | Add the required port to `egressPorts` |
 | OIDC TLS errors | Mount a CA bundle — see [Private CA certificates](./docs/deployment.md#private--self-signed-ca-certificates) |
+| `pip install` fails in air-gapped cluster | Set `workspace.packageMirrors.pip.indexUrl`; add `trustedHost` if the mirror uses an untrusted cert |
+| `npm install` fails in air-gapped cluster | Set `workspace.packageMirrors.npm.registry` |
 
 ---
 

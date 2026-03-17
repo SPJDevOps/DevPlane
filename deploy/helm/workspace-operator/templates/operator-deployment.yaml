@@ -45,6 +45,22 @@ spec:
         {{- end }}
         - name: GATEWAY_NAMESPACE
           value: {{ .Release.Namespace | quote }}
+        {{- if .Values.workspace.defaultCABundle.configMapName }}
+        - name: DEFAULT_CA_BUNDLE_CONFIGMAP
+          value: {{ .Values.workspace.defaultCABundle.configMapName | quote }}
+        {{- end }}
+        {{- if .Values.workspace.packageMirrors.pip.indexUrl }}
+        - name: PIP_INDEX_URL
+          value: {{ .Values.workspace.packageMirrors.pip.indexUrl | quote }}
+        {{- end }}
+        {{- if .Values.workspace.packageMirrors.pip.trustedHost }}
+        - name: PIP_TRUSTED_HOST
+          value: {{ .Values.workspace.packageMirrors.pip.trustedHost | quote }}
+        {{- end }}
+        {{- if .Values.workspace.packageMirrors.npm.registry }}
+        - name: NPM_REGISTRY
+          value: {{ .Values.workspace.packageMirrors.npm.registry | quote }}
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

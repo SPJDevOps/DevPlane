@@ -23,15 +23,21 @@ if [ -f "${HOME}/.kube/config" ]; then
 fi
 
 # ── Custom CA certificates ────────────────────────────────────────────────────
-# If a custom CA ConfigMap is mounted, concatenate all certs into a single
-# bundle file and set env vars so Go, curl, Python, and Node.js trust them.
+# Always point Python (requests/boto3), curl, git, and Node.js at a known CA bundle.
+# When a custom CA ConfigMap is mounted, merge it with system certs first.
 if [ "${CUSTOM_CA_MOUNTED:-}" = "true" ] && [ -d /etc/ssl/certs/custom ]; then
   cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/custom/*.crt \
       /etc/ssl/certs/custom/*.pem 2>/dev/null > /tmp/ca-bundle.crt || true
-  export SSL_CERT_FILE=/tmp/ca-bundle.crt
-  export REQUESTS_CA_BUNDLE=/tmp/ca-bundle.crt
-  export NODE_EXTRA_CA_CERTS=/tmp/ca-bundle.crt
+  _CA_BUNDLE=/tmp/ca-bundle.crt
+else
+  _CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 fi
+export SSL_CERT_FILE=$_CA_BUNDLE
+export REQUESTS_CA_BUNDLE=$_CA_BUNDLE   # pip, boto3, requests
+export CURL_CA_BUNDLE=$_CA_BUNDLE       # curl
+export GIT_SSL_CAINFO=$_CA_BUNDLE       # git
+export NODE_EXTRA_CA_CERTS=$_CA_BUNDLE  # Node.js / npm
+unset _CA_BUNDLE
 
 # ── opencode ──────────────────────────────────────────────────────────────────
 # Rewritten on every start so changes to env vars (e.g. new LLM endpoint)

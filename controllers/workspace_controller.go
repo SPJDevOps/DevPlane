@@ -47,6 +47,13 @@ type WorkspaceReconciler struct {
 	// deny-all policy does not silently block gateway traffic.  When empty,
 	// the NetworkPolicy falls back to same-namespace-only matching.
 	GatewayNamespace string
+	// DefaultCABundle is the name of the ConfigMap (in the workspaces namespace)
+	// containing a CA certificate bundle to mount in all workspace pods when
+	// spec.tls.customCABundle is not set.
+	DefaultCABundle string
+	PipIndexURL     string
+	PipTrustedHost  string
+	NpmRegistry     string
 }
 
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
@@ -160,7 +167,12 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			log.Error(err, "Failed to get Pod")
 			return ctrl.Result{}, err
 		}
-		podObj, buildErr := workspace.BuildPod(&ws, pvcName, image, r.Scheme)
+		podObj, buildErr := workspace.BuildPod(&ws, pvcName, image, r.Scheme, workspace.BuildOpts{
+				DefaultCABundle: r.DefaultCABundle,
+				PipIndexURL:     r.PipIndexURL,
+				PipTrustedHost:  r.PipTrustedHost,
+				NpmRegistry:     r.NpmRegistry,
+			})
 		if buildErr != nil {
 			log.Error(buildErr, "Failed to build Pod")
 			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", buildErr.Error()); updateErr != nil {

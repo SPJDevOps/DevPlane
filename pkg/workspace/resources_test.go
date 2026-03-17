@@ -122,7 +122,7 @@ func TestBuildPVC_EmptyStorageClass(t *testing.T) {
 
 func TestBuildPod(t *testing.T) {
 	ws := minimalWorkspace()
-	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{})
 	if err != nil {
 		t.Fatalf("BuildPod: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestBuildPod(t *testing.T) {
 func TestBuildPod_WithCABundle(t *testing.T) {
 	ws := minimalWorkspace()
 	ws.Spec.TLS.CustomCABundle = &workspacev1alpha1.CABundleRef{Name: "my-ca-bundle"}
-	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{})
 	if err != nil {
 		t.Fatalf("BuildPod: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestBuildPod_WithCABundle(t *testing.T) {
 
 func TestBuildPod_WithoutCABundle(t *testing.T) {
 	ws := minimalWorkspace()
-	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{})
 	if err != nil {
 		t.Fatalf("BuildPod: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestBuildPVC_InvalidStorageQuantity(t *testing.T) {
 
 func TestBuildPod_SecurityContext(t *testing.T) {
 	ws := minimalWorkspace()
-	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme)
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{})
 	if err != nil {
 		t.Fatalf("BuildPod: %v", err)
 	}
@@ -562,4 +562,81 @@ func TestBuildPod_SecurityContext(t *testing.T) {
 			t.Errorf("PodSecurityContext.FSGroupChangePolicy = %v, want OnRootMismatch", psc.FSGroupChangePolicy)
 		}
 	})
+}
+
+func TestBuildPod_DefaultCABundle(t *testing.T) {
+	ws := minimalWorkspace()
+	// No per-CR CA bundle set; only opts.DefaultCABundle is set.
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{DefaultCABundle: "global-ca-bundle"})
+	if err != nil {
+		t.Fatalf("BuildPod: %v", err)
+	}
+
+	foundVolume := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "custom-ca-certs" {
+			foundVolume = true
+			if v.ConfigMap == nil || v.ConfigMap.Name != "global-ca-bundle" {
+				t.Errorf("custom-ca-certs volume ConfigMap = %v, want global-ca-bundle", v.ConfigMap)
+			}
+		}
+	}
+	if !foundVolume {
+		t.Error("expected custom-ca-certs volume from DefaultCABundle")
+	}
+
+	c := &pod.Spec.Containers[0]
+	envMap := make(map[string]string)
+	for _, e := range c.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["CUSTOM_CA_MOUNTED"] != "true" {
+		t.Errorf("CUSTOM_CA_MOUNTED = %q, want true", envMap["CUSTOM_CA_MOUNTED"])
+	}
+}
+
+func TestBuildPod_CRCABundleTakesPrecedence(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.TLS.CustomCABundle = &workspacev1alpha1.CABundleRef{Name: "per-cr-bundle"}
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, BuildOpts{DefaultCABundle: "global-ca-bundle"})
+	if err != nil {
+		t.Fatalf("BuildPod: %v", err)
+	}
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "custom-ca-certs" {
+			if v.ConfigMap == nil || v.ConfigMap.Name != "per-cr-bundle" {
+				t.Errorf("custom-ca-certs volume ConfigMap = %v, want per-cr-bundle", v.ConfigMap)
+			}
+			return
+		}
+	}
+	t.Error("expected custom-ca-certs volume")
+}
+
+func TestBuildPod_PackageMirrors(t *testing.T) {
+	ws := minimalWorkspace()
+	opts := BuildOpts{
+		PipIndexURL:    "https://nexus.example.com/pypi/simple",
+		PipTrustedHost: "nexus.example.com",
+		NpmRegistry:    "https://nexus.example.com/npm",
+	}
+	pod, err := BuildPod(ws, "john-workspace-pvc", "workspace:0.0.1", scheme, opts)
+	if err != nil {
+		t.Fatalf("BuildPod: %v", err)
+	}
+
+	envMap := make(map[string]string)
+	for _, e := range pod.Spec.Containers[0].Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["PIP_INDEX_URL"] != opts.PipIndexURL {
+		t.Errorf("PIP_INDEX_URL = %q, want %q", envMap["PIP_INDEX_URL"], opts.PipIndexURL)
+	}
+	if envMap["PIP_TRUSTED_HOST"] != opts.PipTrustedHost {
+		t.Errorf("PIP_TRUSTED_HOST = %q, want %q", envMap["PIP_TRUSTED_HOST"], opts.PipTrustedHost)
+	}
+	if envMap["npm_config_registry"] != opts.NpmRegistry {
+		t.Errorf("npm_config_registry = %q, want %q", envMap["npm_config_registry"], opts.NpmRegistry)
+	}
 }

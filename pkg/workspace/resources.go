@@ -95,8 +95,16 @@ func ServiceAccountName(userID string) string {
 	return fmt.Sprintf("%s-workspace", userID)
 }
 
+// BuildOpts holds operator-level defaults injected into every workspace pod.
+type BuildOpts struct {
+	DefaultCABundle string // ConfigMap name; used when spec.tls.customCABundle is empty
+	PipIndexURL     string
+	PipTrustedHost  string
+	NpmRegistry     string
+}
+
 // BuildPod creates a Pod for the workspace with security context, volume, env, and owner reference.
-func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage string, scheme *runtime.Scheme) (*corev1.Pod, error) {
+func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage string, scheme *runtime.Scheme, opts BuildOpts) (*corev1.Pod, error) {
 	userID := workspace.Spec.User.ID
 	name := PodName(userID)
 	labels := Labels(userID)
@@ -189,13 +197,19 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 			},
 		},
 	}
+	caConfigMap := ""
 	if workspace.Spec.TLS.CustomCABundle != nil && workspace.Spec.TLS.CustomCABundle.Name != "" {
+		caConfigMap = workspace.Spec.TLS.CustomCABundle.Name
+	} else if opts.DefaultCABundle != "" {
+		caConfigMap = opts.DefaultCABundle
+	}
+	if caConfigMap != "" {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: "custom-ca-certs",
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: workspace.Spec.TLS.CustomCABundle.Name,
+						Name: caConfigMap,
 					},
 				},
 			},
@@ -207,6 +221,21 @@ func BuildPod(workspace *workspacev1alpha1.Workspace, pvcName, workspaceImage st
 		})
 		pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: "CUSTOM_CA_MOUNTED", Value: "true"},
+		)
+	}
+	if opts.PipIndexURL != "" {
+		pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env,
+			corev1.EnvVar{Name: "PIP_INDEX_URL", Value: opts.PipIndexURL},
+		)
+	}
+	if opts.PipTrustedHost != "" {
+		pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env,
+			corev1.EnvVar{Name: "PIP_TRUSTED_HOST", Value: opts.PipTrustedHost},
+		)
+	}
+	if opts.NpmRegistry != "" {
+		pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env,
+			corev1.EnvVar{Name: "npm_config_registry", Value: opts.NpmRegistry},
 		)
 	}
 

@@ -90,3 +90,15 @@ workspace:
   # pod is automatically stopped.  Uses Go duration syntax (e.g. "24h", "8h30m").
   # Leave empty to disable idle shutdown.
   idleTimeout: "24h"
+  # defaultCABundle: name of a ConfigMap in the workspaces namespace containing
+  # custom CA certificates. Applied to all workspace pods when set. Individual
+  # Workspace CRs can still override this via spec.tls.customCABundle.
+  defaultCABundle:
+    configMapName: ""
+  # packageMirrors: configure pip and npm to use internal mirrors (air-gapped).
+  packageMirrors:
+    pip:
+      indexUrl: ""     # e.g. https://nexus.example.com/repository/pypi-proxy/simple
+      trustedHost: ""  # hostname only, e.g. nexus.example.com (for self-signed certs)
+    npm:
+      registry: ""     # e.g. https://nexus.example.com/repository/npm-proxy
