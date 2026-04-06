@@ -32,7 +32,7 @@ func TestCopyFrames_ForwardsMessages(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		_, b, err := c.ReadMessage()
 		if err == nil {
 			gotMsg <- string(b)
@@ -57,14 +57,14 @@ func TestCopyFrames_ForwardsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial src server: %v", err)
 	}
-	defer srcClientConn.Close()
+	defer func() { _ = srcClientConn.Close() }()
 	src := <-srcServerConn
 
 	dstClientConn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(dstSrv.URL, "http"), nil)
 	if err != nil {
 		t.Fatalf("dial dst server: %v", err)
 	}
-	defer dstClientConn.Close()
+	defer func() { _ = dstClientConn.Close() }()
 
 	// Wire copyFrames: src → dstClientConn.
 	// Use atomic to avoid a data race between the copyFrames goroutine (writer)
@@ -105,7 +105,7 @@ func TestServeWS(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			mt, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -133,7 +133,7 @@ func TestServeWS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial frontend proxy: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send through the proxy to the echo backend and read the echo back.
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("proxy-hello")); err != nil {
@@ -172,7 +172,7 @@ func TestServeWS_SubprotocolForwarded(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// Echo one message then close.
 		mt, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -197,7 +197,7 @@ func TestServeWS_SubprotocolForwarded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial frontend proxy: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Gateway must echo the subprotocol back to the client.
 	if got := conn.Subprotocol(); got != "tty" {
@@ -258,7 +258,7 @@ func TestCopyFrames(t *testing.T) {
 			t.Logf("echo server upgrade: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			mt, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -278,7 +278,7 @@ func TestCopyFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial echo server: %v", err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Send a message and read back
 	msg := []byte("hello workspace")
@@ -301,7 +301,7 @@ func TestBackendReady(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind to port %d (likely in use): %v", ttydPort, err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// Accept and close connections in the background so BackendReady's
 	// dial succeeds (net.DialTimeout completes once TCP handshake finishes).
@@ -311,7 +311,7 @@ func TestBackendReady(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 

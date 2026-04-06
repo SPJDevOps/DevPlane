@@ -127,7 +127,7 @@ golangci-lint:
 		echo "golangci-lint found"; \
 	else \
 		echo "Installing golangci-lint"; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	fi
 
 .PHONY: envtest

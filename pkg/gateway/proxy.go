@@ -44,7 +44,7 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	if err != nil {
 		return fmt.Errorf("upgrade client connection: %w", err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Use a separate context with a hard deadline for dialing the backend so that
 	// a slow or unresponsive pod does not hold the goroutine open indefinitely.
@@ -59,7 +59,7 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	if err != nil {
 		return fmt.Errorf("dial backend %q: %w", backendURL, err)
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 
 	p.log.Info("WebSocket tunnel open", "backend", backendURL)
 
@@ -121,6 +121,6 @@ func BackendReady(serviceEndpoint string) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }

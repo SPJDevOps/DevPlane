@@ -47,8 +47,9 @@ jobs:
       # matches the targeted Go version — avoiding the "build version < targeted
       # version" error that pre-built release binaries trigger when a new Go
       # version ships before golangci-lint cuts a new binary release.
+      # v2 tracks the Go release series; v1 @latest can mis-typecheck Go 1.26+ sources.
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
       - name: Run golangci-lint
         run: golangci-lint run --timeout=5m

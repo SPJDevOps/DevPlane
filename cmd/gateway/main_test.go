@@ -396,14 +396,14 @@ func TestHandleWS_StoppedWorkspaceRecovery(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind to port 7681 (likely in use): %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 
@@ -428,14 +428,14 @@ func TestHandleWS_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind to port 7681 (likely in use): %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 
@@ -762,14 +762,14 @@ func TestHandleWorkspaceAPI_TTYDReadyTrue(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind to port 7681: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 

@@ -235,7 +235,7 @@ func injectFullWidthTerminalCSS(resp *http.Response) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	headClose := []byte("</head>")
 	if !bytes.Contains(body, headClose) {
 		resp.Body = io.NopCloser(bytes.NewReader(body))
