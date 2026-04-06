@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"golang.org/x/oauth2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
 	gw "workspace-operator/pkg/gateway"
 )
@@ -669,5 +671,127 @@ func TestServeLoadingPage_Status200(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+}
+
+// --- handleWorkspaceAPI tests ---
+
+func TestHandleWorkspaceAPI_MethodNotAllowed(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/workspace", nil)
+	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestHandleWorkspaceAPI_UnauthorizedNoToken(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog())
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != "unauthorized" {
+		t.Errorf("error = %q, want unauthorized", body["error"])
+	}
+}
+
+func TestHandleWorkspaceAPI_InvalidTokenJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer bad")
+	v := &stubValidator{err: errors.New("invalid")}
+	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog())
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestHandleWorkspaceAPI_EnsureExistsFails(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	v := &stubValidator{claims: validClaims()}
+	lc := &stubLifecycle{existsErr: errors.New("k8s down")}
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+}
+
+func TestHandleWorkspaceAPI_OK(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
+	ws.Status.Message = "waiting"
+	lc := &stubLifecycle{existsWs: ws}
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got workspaceAPIResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if got.Name != "alice" || got.Namespace != "default" {
+		t.Errorf("name/ns = %q/%q, want alice/default", got.Name, got.Namespace)
+	}
+	if got.Phase != "Pending" {
+		t.Errorf("phase = %q, want Pending", got.Phase)
+	}
+	if got.Message != "waiting" {
+		t.Errorf("message = %q, want waiting", got.Message)
+	}
+	if got.TTYDReady {
+		t.Error("TTYDReady should be false for Pending workspace")
+	}
+}
+
+func TestHandleWorkspaceAPI_TTYDReadyTrue(t *testing.T) {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", 7681))
+	if err != nil {
+		t.Skipf("cannot bind to port 7681: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
+	ws.Status.ServiceEndpoint = "127.0.0.1"
+	lc := &stubLifecycle{existsWs: ws}
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got workspaceAPIResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if !got.TTYDReady {
+		t.Error("TTYDReady = false, want true when backend accepts TCP")
 	}
 }

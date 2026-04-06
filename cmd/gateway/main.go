@@ -134,6 +134,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/api/workspace", func(w http.ResponseWriter, r *http.Request) {
+		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, secure, log)
+	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWS(w, r, validator, lifecycle, proxy, namespace, log)
 	})
@@ -255,6 +258,81 @@ func serveLoadingPage(w http.ResponseWriter, _ *http.Request, displayName, phase
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = loadingTmpl.Execute(w, loadingPageData{DisplayName: displayName, Phase: phase})
+}
+
+// workspaceAPIResponse is the JSON body for GET /api/workspace.
+type workspaceAPIResponse struct {
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	UserID          string `json:"userId"`
+	Email           string `json:"email"`
+	Phase           string `json:"phase"`
+	ServiceEndpoint string `json:"serviceEndpoint,omitempty"`
+	PodName         string `json:"podName,omitempty"`
+	Message         string `json:"message,omitempty"`
+	TTYDReady       bool   `json:"ttydReady"`
+}
+
+// handleWorkspaceAPI returns JSON describing the caller's Workspace CR after
+// EnsureExists (create-or-get). Clients use it for status polling; browsers
+// still use / for the ttyd UI and /ws for the raw terminal WebSocket.
+func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
+	validator tokenValidator, lifecycle workspaceLifecycle,
+	namespace string, secure bool, log logr.Logger,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rawToken, err := extractToken(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		return
+	}
+	claims, err := validator.Validate(r.Context(), rawToken)
+	if err != nil {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "devplane_token",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   secure,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		return
+	}
+	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
+	if err != nil {
+		log.Error(err, "EnsureExists failed (API)", "user", claims.UserID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"workspace_unavailable"}`))
+		return
+	}
+	ready := ws.Status.Phase == workspacev1alpha1.WorkspacePhaseRunning &&
+		ws.Status.ServiceEndpoint != "" &&
+		gw.BackendReady(ws.Status.ServiceEndpoint)
+	resp := workspaceAPIResponse{
+		Name:            ws.Name,
+		Namespace:       ws.Namespace,
+		UserID:          claims.UserID,
+		Email:           claims.Email,
+		Phase:           string(ws.Status.Phase),
+		ServiceEndpoint: ws.Status.ServiceEndpoint,
+		PodName:         ws.Status.PodName,
+		Message:         ws.Status.Message,
+		TTYDReady:       ready,
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(true)
+	_ = enc.Encode(resp)
 }
 
 // handleHealth responds to liveness and readiness probes.
