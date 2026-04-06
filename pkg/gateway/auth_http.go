@@ -10,6 +10,8 @@ import (
 const (
 	AuthErrorCodeUnauthorized = "unauthorized"
 	AuthErrorCodeForbidden    = "forbidden"
+	// AuthErrorCodeTokenExpired is returned when the OIDC ID token is past exp (after clock skew).
+	AuthErrorCodeTokenExpired = "token_expired"
 	// WorkspaceErrorCodeUnavailable is returned when the gateway cannot read or create the Workspace CR.
 	WorkspaceErrorCodeUnavailable = "workspace_unavailable"
 	// WorkspaceErrorCodeNotReady is returned when the workspace pod is not listening on ttyd yet.
@@ -40,6 +42,9 @@ func AuthErrorResponse(err error) (status int, code string) {
 	}
 	if errors.Is(err, ErrForbidden) {
 		return http.StatusForbidden, AuthErrorCodeForbidden
+	}
+	if errors.Is(err, ErrTokenExpired) {
+		return http.StatusUnauthorized, AuthErrorCodeTokenExpired
 	}
 	return http.StatusUnauthorized, AuthErrorCodeUnauthorized
 }

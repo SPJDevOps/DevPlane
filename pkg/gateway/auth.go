@@ -22,13 +22,21 @@ var ErrUnauthorized = errors.New("unauthenticated")
 // not permitted for this application (for example audience mismatch).
 var ErrForbidden = errors.New("forbidden")
 
+// ErrTokenExpired means the OIDC ID token is past its expiry (within verifier leeway).
+var ErrTokenExpired = errors.New("token expired")
+
 // OIDCConfig configures JWT validation against an OIDC issuer discovered at IssuerURL.
 // ClientID is the OAuth2 client identifier used for the browser authorization-code flow.
 // Audience is the expected JWT "aud" claim; when empty it defaults to ClientID.
+// ClockSkew adjusts the verifier "now" clock backward by this duration so slightly
+// expired tokens still validate (mitigate NTP skew between gateway and IdP). Zero
+// disables skew (strict expiry). The go-oidc library applies a separate fixed leeway
+// for the nbf claim.
 type OIDCConfig struct {
-	IssuerURL string
-	ClientID  string
-	Audience  string
+	IssuerURL  string
+	ClientID   string
+	Audience   string
+	ClockSkew  time.Duration
 }
 
 const (
@@ -103,8 +111,13 @@ func NewValidatorWithOIDC(ctx context.Context, cfg OIDCConfig) (*Validator, erro
 	if err != nil {
 		return nil, fmt.Errorf("OIDC provider discovery %q: %w", cfg.IssuerURL, err)
 	}
+	verifyCfg := &gooidc.Config{ClientID: audience}
+	if cfg.ClockSkew > 0 {
+		skew := cfg.ClockSkew
+		verifyCfg.Now = func() time.Time { return time.Now().Add(-skew) }
+	}
 	v := &Validator{
-		verifier: provider.Verifier(&gooidc.Config{ClientID: audience}),
+		verifier: provider.Verifier(verifyCfg),
 		index:    make(map[string]*list.Element),
 		lru:      list.New(),
 	}
@@ -115,6 +128,10 @@ func NewValidatorWithOIDC(ctx context.Context, cfg OIDCConfig) (*Validator, erro
 func classifyOIDCVerifyError(err error) error {
 	if err == nil {
 		return nil
+	}
+	var expired *gooidc.TokenExpiredError
+	if errors.As(err, &expired) {
+		return fmt.Errorf("%w: %v", ErrTokenExpired, err)
 	}
 	msg := strings.ToLower(err.Error())
 	// oidc reports audience mismatches as verification failures — treat as 403.

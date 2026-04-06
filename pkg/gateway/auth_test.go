@@ -167,6 +167,76 @@ func TestValidate_WithMockJWKS(t *testing.T) {
 	}
 }
 
+func TestValidate_ExpiredIDToken_ReturnsTokenExpired(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("RSA key: %v", err)
+	}
+	const kid = "test-kid"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		issuer := "http://" + r.Host
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/auth",
+				"token_endpoint":         issuer + "/token",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			pub := jose.JSONWebKey{Key: priv.Public(), KeyID: kid, Algorithm: string(jose.RS256), Use: "sig"}
+			set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{pub}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(set)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	issuer := srv.URL
+	now := time.Now()
+	claims := map[string]any{
+		"iss":   issuer,
+		"sub":   "alice",
+		"aud":   "gw-client",
+		"email": "alice@example.com",
+		"exp":   now.Add(-time.Hour).Unix(),
+		"iat":   now.Add(-2 * time.Hour).Unix(),
+	}
+	payload, _ := json.Marshal(claims)
+	signer, _ := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: priv},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), kid),
+	)
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	v, err := NewValidatorWithOIDC(ctx, OIDCConfig{IssuerURL: issuer, ClientID: "unused", Audience: "gw-client"})
+	if err != nil {
+		t.Fatalf("NewValidatorWithOIDC: %v", err)
+	}
+
+	_, err = v.Validate(ctx, rawToken)
+	if err == nil {
+		t.Fatal("expected error for expired token")
+	}
+	if !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("expected ErrTokenExpired, got %v", err)
+	}
+}
+
 func TestValidate_WrongAudience_ReturnsForbidden(t *testing.T) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -244,6 +314,10 @@ func TestAuthErrorResponse(t *testing.T) {
 	st, code = AuthErrorResponse(fmt.Errorf("wrap: %w", ErrForbidden))
 	if st != http.StatusForbidden || code != AuthErrorCodeForbidden {
 		t.Fatalf("forbidden: status=%d code=%q", st, code)
+	}
+	st, code = AuthErrorResponse(fmt.Errorf("wrap: %w", ErrTokenExpired))
+	if st != http.StatusUnauthorized || code != AuthErrorCodeTokenExpired {
+		t.Fatalf("token_expired: status=%d code=%q", st, code)
 	}
 }
 

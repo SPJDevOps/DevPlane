@@ -56,6 +56,8 @@ spec:
         - name: OIDC_AUDIENCE
           value: {{ .Values.gateway.oidc.audience | quote }}
         {{- end }}
+        - name: OIDC_CLOCK_SKEW
+          value: {{ .Values.gateway.oidc.clockSkew | default "60s" | quote }}
         - name: NAMESPACE
           value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
         - name: AI_PROVIDERS_JSON

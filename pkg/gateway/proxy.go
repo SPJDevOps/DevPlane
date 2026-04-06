@@ -15,7 +15,17 @@ import (
 const (
 	ttydPort           = 7681
 	backendDialTimeout = 30 * time.Second
+	// maxWSFrameBytes caps a single WebSocket message from either peer to limit memory
+	// use if a client or ttyd misbehaves (default gorilla limit is unlimited).
+	maxWSFrameBytes = 1 << 20 // 1 MiB
 )
+
+// wsBackendDialer matches DefaultDialer but uses the same handshake timeout as
+// backendDialTimeout and honors HTTP_PROXY for outbound dials from the gateway.
+var wsBackendDialer = &websocket.Dialer{
+	Proxy:            http.ProxyFromEnvironment,
+	HandshakeTimeout: backendDialTimeout,
+}
 
 var upgrader = websocket.Upgrader{
 	HandshakeTimeout: 10 * time.Second,
@@ -55,11 +65,14 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	if subproto := clientConn.Subprotocol(); subproto != "" {
 		backendHeaders = http.Header{"Sec-WebSocket-Protocol": []string{subproto}}
 	}
-	backendConn, _, err := websocket.DefaultDialer.DialContext(dialCtx, backendURL, backendHeaders)
+	backendConn, _, err := wsBackendDialer.DialContext(dialCtx, backendURL, backendHeaders)
 	if err != nil {
 		return fmt.Errorf("dial backend %q: %w", backendURL, err)
 	}
 	defer func() { _ = backendConn.Close() }()
+
+	clientConn.SetReadLimit(maxWSFrameBytes)
+	backendConn.SetReadLimit(maxWSFrameBytes)
 
 	p.log.Info("WebSocket tunnel open", LogKeyComponent, ComponentGateway, LogKeyEvent, EventWSProxyStart, "backend", backendURL)
 

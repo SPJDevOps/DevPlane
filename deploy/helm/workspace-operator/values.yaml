@@ -74,6 +74,9 @@ gateway:
     redirectURL: ""    # Full callback URL, e.g. https://devplane.example.com/callback
     # Optional JWT audience when it differs from clientID (defaults to clientID).
     audience: ""
+    # Max clock skew between IdP and gateway when validating JWT exp (Go duration, e.g. 60s, 2m).
+    # Passed as OIDC_CLOCK_SKEW; unset defaults to 60s in the gateway. Use "0" to disable.
+    clockSkew: "60s"
     # Name of an existing Secret with keys: issuer-url, client-id, client-secret, redirect-url.
     # If set, oidc.issuerURL / clientID / clientSecret / redirectURL are ignored.
     existingSecret: ""

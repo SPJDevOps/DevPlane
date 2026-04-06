@@ -102,10 +102,16 @@ func main() {
 			"devUserSub", devSub)
 	} else {
 		audienceOverride := strings.TrimSpace(os.Getenv("OIDC_AUDIENCE"))
+		clockSkew, err := parseOIDCClockSkew()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid OIDC_CLOCK_SKEW: %v\n", err)
+			os.Exit(1)
+		}
 		v, err := gw.NewValidatorWithOIDC(ctx, gw.OIDCConfig{
 			IssuerURL: issuerURL,
 			ClientID:  clientID,
 			Audience:  audienceOverride,
+			ClockSkew: clockSkew,
 		})
 		if err != nil {
 			log.Error(err, "Failed to initialize OIDC validator")
@@ -116,7 +122,7 @@ func main() {
 		if effectiveAud == "" {
 			effectiveAud = clientID
 		}
-		log.Info("OIDC validator ready", "issuer", issuerURL, "audience", effectiveAud)
+		log.Info("OIDC validator ready", "issuer", issuerURL, "audience", effectiveAud, "clockSkew", clockSkew.String())
 	}
 
 	oidcProvider, err := gooidc.NewProvider(ctx, issuerURL)
@@ -613,4 +619,21 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseOIDCClockSkew returns JWT exp leeway for IdP ↔ gateway clock skew.
+// Default 60s when OIDC_CLOCK_SKEW is unset; set to "0" to disable.
+func parseOIDCClockSkew() (time.Duration, error) {
+	s := strings.TrimSpace(os.Getenv("OIDC_CLOCK_SKEW"))
+	if s == "" {
+		return 60 * time.Second, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("duration must be >= 0")
+	}
+	return d, nil
 }

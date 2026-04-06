@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/oauth2"
@@ -102,6 +103,36 @@ func TestEnvOr_Present(t *testing.T) {
 func TestEnvOr_Missing(t *testing.T) {
 	if got := envOr("TEST_ENVOR_MISSING_XYZ", "fallback"); got != "fallback" {
 		t.Errorf("envOr = %q, want fallback", got)
+	}
+}
+
+func TestParseOIDCClockSkew_Default(t *testing.T) {
+	t.Setenv("OIDC_CLOCK_SKEW", "")
+	d, err := parseOIDCClockSkew()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if d != 60*time.Second {
+		t.Fatalf("default = %v, want 60s", d)
+	}
+}
+
+func TestParseOIDCClockSkew_Zero(t *testing.T) {
+	t.Setenv("OIDC_CLOCK_SKEW", "0")
+	d, err := parseOIDCClockSkew()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if d != 0 {
+		t.Fatalf("d = %v, want 0", d)
+	}
+}
+
+func TestParseOIDCClockSkew_Invalid(t *testing.T) {
+	t.Setenv("OIDC_CLOCK_SKEW", "not-a-duration")
+	_, err := parseOIDCClockSkew()
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 
@@ -403,6 +434,22 @@ func TestHandleWS_ForbiddenAudience(t *testing.T) {
 	}
 	if body["error"] != gw.AuthErrorCodeForbidden {
 		t.Errorf("error = %q, want forbidden", body["error"])
+	}
+}
+
+func TestHandleWS_TokenExpired(t *testing.T) {
+	w := httptest.NewRecorder()
+	v := &stubValidator{err: fmt.Errorf("%w: expired", gw.ErrTokenExpired)}
+	handleWS(w, wsRequest("tok"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog(), nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.AuthErrorCodeTokenExpired {
+		t.Errorf("error = %q, want token_expired", body["error"])
 	}
 }
 

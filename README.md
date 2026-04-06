@@ -84,7 +84,7 @@ Three components ship as separate images:
 | **Gateway** | Single user-facing entrypoint. Handles OIDC login, creates/gets Workspace CRs, proxies WebSocket to the user's pod. |
 | **Workspace Pod** | Ubuntu 24.04 + ttyd + tmux + opencode. Non-root, read-only root FS. Env vars from the CR wire opencode to the LLM. |
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full auth flow and security model.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full auth flow and security model. For gateway JSON error codes, OIDC clock skew, and WebSocket proxy limits, see [docs/gateway-auth-proxy.md](./docs/gateway-auth-proxy.md).
 
 ---
 
@@ -349,7 +349,7 @@ Both services use **zap** (JSON in production). Prefer filtering on these keys:
 | Symptom | What to check |
 |---------|----------------|
 | **Login / OIDC** — redirect loop or 502 on `/callback` | Gateway logs for `gateway.oidc.token_exchange.failure` or `gateway.oidc.id_token.invalid`. Verify `OIDC_ISSUER_URL`, client id/secret, redirect URL registered with IdP, and cluster time sync. `kubectl logs deploy/workspace-gateway -n workspace-operator-system` |
-| **401 / `unauthorized` on `/api/workspace` or `/ws`** | `devplane_gateway_json_api_errors_total{error_code="unauthorized"}`. Compare IdP `iss` with `issuerURL`; confirm token not expired. |
+| **401 / `unauthorized` or `token_expired` on `/api/workspace` or `/ws`** | `devplane_gateway_json_api_errors_total` with `error_code` `unauthorized` or `token_expired`. Compare IdP `iss` with `issuerURL`; check token expiry; tune `OIDC_CLOCK_SKEW` / Helm `gateway.oidc.clockSkew` if NTP skew is an issue. See [docs/gateway-auth-proxy.md](./docs/gateway-auth-proxy.md). |
 | **429 / `rate_limited`** | Tune `gateway.rateLimit` in Helm (see [docs/deployment.md](./docs/deployment.md#gateway-high-availability-and-rate-limits)). Check `devplane_gateway_rate_limit_hits_total` and logs with `gateway.rate_limit.exceeded`. |
 | **Workspace stuck “spawning”** — phase not `Running` | `kubectl get workspace -n workspaces -o wide` — check `status.phase`, `status.message`. Operator logs for `workspace.phase.transition` to `Failed` or RBAC/NetPol errors. |
 | **Pod not ready** — phase `Running` but no terminal | `kubectl describe pod -n workspaces <user>-workspace-pod` — image pull, mounts, probes. Gateway: `gateway.ws.backend_not_ready` or `workspace_not_ready` until ttyd listens on `7681`. |
