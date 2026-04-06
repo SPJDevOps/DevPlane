@@ -274,6 +274,82 @@ By default each workspace pod is allowed egress on:
 
 Override per-cluster (`workspace.ai.egressPorts` in values) or per-workspace (`spec.aiConfig.egressPorts` on the CR). Changes take effect on the next reconcile.
 
+Precedence for both namespace and port lists is: **Workspace CR → operator env (Helm) → built-in default** (see `pkg/security.ResolveLLMEgressNamespaces` and `ResolveEgressPorts`).
+
+### Verifying network isolation
+
+The operator reconciles three policies per workspace: **deny-all** (baseline), **egress** (DNS, LLM namespaces, and TCP to `0.0.0.0/0` on configured ports only), and **ingress-gateway** (ttyd from gateway pods). Together they implement deny-by-default with explicit holes.
+
+**Inspect policies**
+
+```bash
+kubectl get networkpolicy -n workspaces
+kubectl describe networkpolicy -n workspaces <userid>-workspace-egress
+```
+
+**Cross-user traffic (shared workspaces namespace)**
+
+Pick two running workspace pods (for example `alice-workspace-pod` and `bob-workspace-pod`). Egress to another pod’s IP is only permitted on the **configured TCP ports** (for example 80, 443, 8000). A probe to an unlisted port (for example the other pod’s ttyd on 7681) should fail:
+
+```bash
+ALICE_POD=alice-workspace-pod
+BOB_POD=bob-workspace-pod
+BOB_IP="$(kubectl get pod -n workspaces "$BOB_POD" -o jsonpath='{.status.podIP}')"
+kubectl exec -n workspaces "$ALICE_POD" -- sh -c \
+  'command -v nc >/dev/null && nc -zvw2 '"$BOB_IP"' 7681 || true'
+# Expected: connection refused / timeout (7681 is not in the default egress port list).
+```
+
+For stricter separation, run one workspace namespace per tenant or add cluster-specific policies; the default chart targets a single shared `workspaces` namespace with per-user labels and NetworkPolicies.
+
+---
+
+## Observability & operations runbook
+
+### Endpoints
+
+| Component | Metrics | Health |
+|-----------|---------|--------|
+| **Operator** (controller-manager) | `:8080/metrics` — `metrics-bind-address` flag | `:8081/healthz`, `:8081/readyz` — `health-probe-bind-address` |
+| **Gateway** | `:PORT/metrics` (same port as HTTP; default `8080`) | `GET /health` → `200 ok` |
+
+Scrape Prometheus from both pods. The operator also exposes **kubebuilder/controller-runtime** defaults, including work queue depth and `controller_runtime_reconcile_errors_total{controller="workspace"}` for unhandled reconcile errors.
+
+### DevPlane metrics (Prometheus)
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `devplane_workspace_phase_transitions_total` | `from_phase`, `to_phase` | Successful `Workspace` status patches where `status.phase` changed (e.g. `Creating` → `Running`). |
+| `devplane_workspace_status_patch_failures_total` | — | Failed writes to the `Workspace` status subresource. |
+| `devplane_gateway_json_api_errors_total` | `http_status`, `error_code` | JSON error responses from the gateway (`unauthorized`, `workspace_not_ready`, …). |
+
+### Structured logging contract
+
+Both services use **zap** (JSON in production). Prefer filtering on these keys:
+
+| Key | Used by | Purpose |
+|-----|---------|---------|
+| `devplane.component` | Operator, gateway | `workspace-controller` or `gateway`. |
+| `devplane.event` | Operator, gateway | Stable event name (e.g. `workspace.phase.transition`, `gateway.auth.failure`, `gateway.ws.backend_not_ready`). |
+| `workspace`, `namespace`, `userId` | Operator (phase transitions) | Workspace identity. |
+| `fromPhase`, `toPhase` | Operator | Phase transition. |
+| `error` / `msg` | Both | Error detail (never tokens or secrets). |
+
+**Operator:** Reconcile failures still emit `logger` / `controller` lines with the reconciler error; combine with `controller_runtime_reconcile_errors_total` and `devplane_workspace_status_patch_failures_total`.
+
+**Gateway:** OIDC callback failures log `gateway.oidc.token_exchange.failure` or `gateway.oidc.id_token.invalid`; WebSocket and HTTP proxy paths use `gateway.ws.*` and `gateway.http.backend_unreachable` as in `devplane.event`.
+
+### Runbook (symptoms → checks)
+
+| Symptom | What to check |
+|---------|----------------|
+| **Login / OIDC** — redirect loop or 502 on `/callback` | Gateway logs for `gateway.oidc.token_exchange.failure` or `gateway.oidc.id_token.invalid`. Verify `OIDC_ISSUER_URL`, client id/secret, redirect URL registered with IdP, and cluster time sync. `kubectl logs deploy/workspace-gateway -n workspace-operator-system` |
+| **401 / `unauthorized` on `/api/workspace` or `/ws`** | `devplane_gateway_json_api_errors_total{error_code="unauthorized"}`. Compare IdP `iss` with `issuerURL`; confirm token not expired. |
+| **Workspace stuck “spawning”** — phase not `Running` | `kubectl get workspace -n workspaces -o wide` — check `status.phase`, `status.message`. Operator logs for `workspace.phase.transition` to `Failed` or RBAC/NetPol errors. |
+| **Pod not ready** — phase `Running` but no terminal | `kubectl describe pod -n workspaces <user>-workspace-pod` — image pull, mounts, probes. Gateway: `gateway.ws.backend_not_ready` or `workspace_not_ready` until ttyd listens on `7681`. |
+| **WebSocket drops immediately** | Gateway logs `gateway.ws.session.end` and proxy `WebSocket tunnel closed`. Check NetworkPolicy allows gateway namespace → workspace pod port `7681` (`ingress-gateway` policy). |
+| **Reverse proxy to ttyd UI fails** | Logs with `gateway.http.backend_unreachable` — pod IP/DNS, service endpoints, or pod crashed. |
+
 ---
 
 ## Troubleshooting
@@ -327,6 +403,8 @@ make gateway-smoke
 
 Prerequisites are enforced by the Makefile (both env vars must be set). CI: run the **Gateway E2E smoke** workflow manually from the Actions tab after adding repository secrets `E2E_GATEWAY_URL` and `E2E_ID_TOKEN` — it fails fast with a clear message if secrets are missing.
 
+**Operator + cluster path** (reconcile, optional ttyd HTTP via port-forward): [test/e2e/README.md](test/e2e/README.md) and `make test-e2e`.
+
 To publish commits to GitHub (credentials, branch protection, air-gapped options, and how that relates to CI), see [docs/github-publish.md](./docs/github-publish.md).
 
 ### Directory layout
@@ -349,6 +427,7 @@ hack/              Boilerplate and workspace entrypoint script
 | `make manifests` | Generate CRDs and RBAC from annotations |
 | `make generate` | Generate deepcopy methods |
 | `make test` | Run all tests with coverage |
+| `make test-e2e` | Cluster E2E tests (`-tags e2e`; see [test/e2e/README.md](test/e2e/README.md)) |
 | `make lint` | Run golangci-lint |
 | `make build` | Build operator binary |
 | `make gateway-smoke` | Gateway `/api/workspace` smoke (`E2E_GATEWAY_URL`, `E2E_ID_TOKEN`) |

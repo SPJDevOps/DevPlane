@@ -28,13 +28,39 @@ Your release uses chart version {{ .Chart.Version }} and app version {{ .Chart.A
 kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ .Release.Name }}-controller-manager
 {{- if .Values.gateway.enabled }}
 kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ .Release.Name }}-gateway
+kubectl -n {{ .Release.Namespace }} get pods -l app=workspace-gateway
 kubectl -n {{ .Release.Namespace }} get workspaces.workspace.devplane.io -A
 {{- end }}
 ```
 
+## Post-install smoke (HTTP health)
+
+**Operator readiness** (no Service is created; port-forward the Deployment):
+
+```bash
+kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ .Release.Name }}-controller-manager 8081:8081
+# other terminal:
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8081/readyz   # expect 200
+```
+
+{{- if .Values.gateway.enabled }}
+**Gateway health** (ClusterIP Service `{{ .Release.Name }}-gateway`):
+
+```bash
+kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-gateway 8080:8080
+curl -sS http://127.0.0.1:8080/health
+```
+
+Expect HTTP 200 and body `ok`.
+{{- end }}
+
 ## Workspace CRDs
 
 CRDs ship in the chart `crds/` directory; Helm installs them before other resources.
+
+```bash
+kubectl get crd workspaces.workspace.devplane.io
+```
 
 ## E2E smoke (cluster + kubeconfig)
 

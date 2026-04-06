@@ -2,7 +2,7 @@ apiVersion: v2
 name: workspace-operator
 description: AI-powered development workspaces for air-gapped environments
 type: application
-version: 1.1.6
+version: 1.1.7
 appVersion: "1.1.6"
 keywords:
   - workspace

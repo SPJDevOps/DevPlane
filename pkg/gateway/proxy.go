@@ -61,14 +61,14 @@ func (p *Proxy) ServeWS(w http.ResponseWriter, r *http.Request, backendURL strin
 	}
 	defer func() { _ = backendConn.Close() }()
 
-	p.log.Info("WebSocket tunnel open", "backend", backendURL)
+	p.log.Info("WebSocket tunnel open", LogKeyComponent, ComponentGateway, LogKeyEvent, EventWSProxyStart, "backend", backendURL)
 
 	errc := make(chan error, 2)
 	go copyFrames(clientConn, backendConn, errc, onActivity)
 	go copyFrames(backendConn, clientConn, errc, onActivity)
 
 	err = <-errc
-	p.log.Info("WebSocket tunnel closed", "backend", backendURL, "reason", err)
+	p.log.Info("WebSocket tunnel closed", LogKeyComponent, ComponentGateway, LogKeyEvent, EventWSProxySessionEnd, "backend", backendURL, "reason", err)
 	return nil
 }
 

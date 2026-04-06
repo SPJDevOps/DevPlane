@@ -2,6 +2,8 @@
 
 // Package e2e contains end-to-end tests that run against a real Kubernetes cluster.
 //
+// See README.md in this directory for the full test plan, Helm-first validation path, and limitations.
+//
 // Prerequisites:
 //   - A running cluster with the operator deployed (make install && make run, or helm install)
 //   - A valid kubeconfig (KUBECONFIG env var or ~/.kube/config)

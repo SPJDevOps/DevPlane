@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
+	"workspace-operator/pkg/observability"
 	"workspace-operator/pkg/security"
 	"workspace-operator/pkg/workspace"
 )
@@ -423,20 +424,8 @@ func (r *WorkspaceReconciler) ensureNetworkPolicies(ctx context.Context, ws *wor
 	}
 
 	// Egress (dynamic — reacts to changes in llmNamespaces/egressPorts).
-	llmNamespaces := ws.Spec.AIConfig.EgressNamespaces
-	if len(llmNamespaces) == 0 {
-		llmNamespaces = r.LLMNamespaces
-	}
-	if len(llmNamespaces) == 0 {
-		llmNamespaces = []string{"ai-system"}
-	}
-	egressPorts := ws.Spec.AIConfig.EgressPorts
-	if len(egressPorts) == 0 {
-		egressPorts = r.EgressPorts
-	}
-	if len(egressPorts) == 0 {
-		egressPorts = security.DefaultEgressPorts
-	}
+	llmNamespaces := security.ResolveLLMEgressNamespaces(ws.Spec.AIConfig.EgressNamespaces, r.LLMNamespaces)
+	egressPorts := security.ResolveEgressPorts(ws.Spec.AIConfig.EgressPorts, r.EgressPorts)
 
 	desiredEgress, err := security.BuildEgressNetworkPolicy(ws, llmNamespaces, egressPorts, r.Scheme)
 	if err != nil {
@@ -485,11 +474,23 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1a
 		msg = messageOverride
 	}
 	base := ws.DeepCopy()
+	oldPhase := base.Status.Phase
 	ws.Status.Phase = phase
 	ws.Status.PodName = podName
 	ws.Status.ServiceEndpoint = serviceEndpoint
 	ws.Status.Message = msg
-	return r.Status().Patch(ctx, ws, client.MergeFrom(base))
+	if err := r.Status().Patch(ctx, ws, client.MergeFrom(base)); err != nil {
+		observability.WorkspaceStatusPatchFailures.Inc()
+		return err
+	}
+	if oldPhase != phase {
+		observability.LogWorkspacePhaseTransition(log.FromContext(ctx), ws, oldPhase, phase, podName, serviceEndpoint, msg)
+		observability.WorkspacePhaseTransitions.WithLabelValues(
+			observability.PhaseLabel(string(oldPhase)),
+			observability.PhaseLabel(string(phase)),
+		).Inc()
+	}
+	return nil
 }
 
 // isPodReady returns true if the pod has a Ready condition that is true.

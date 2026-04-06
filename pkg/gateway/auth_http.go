@@ -23,6 +23,7 @@ func WriteJSONAuthError(w http.ResponseWriter, status int, code string) {
 
 // WriteJSONError writes {"error": code} with Content-Type application/json.
 func WriteJSONError(w http.ResponseWriter, status int, code string) {
+	RecordJSONAPIError(status, code)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)

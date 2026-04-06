@@ -22,6 +22,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -152,6 +153,7 @@ func main() {
 	proxy := gw.NewProxy(log)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/api/workspace", func(w http.ResponseWriter, r *http.Request) {
 		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, cookieSecure, log)
@@ -326,10 +328,8 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 	}
 	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
 	if err != nil {
-		log.Error(err, "EnsureExists failed (API)", "user", claims.UserID)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"workspace_unavailable"}`))
+		log.Error(err, "EnsureExists failed (API)", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
+		gw.WriteJSONError(w, http.StatusInternalServerError, gw.WorkspaceErrorCodeUnavailable)
 		return
 	}
 	ready := ws.Status.Phase == workspacev1alpha1.WorkspacePhaseRunning &&
@@ -404,7 +404,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request,
 
 	token, err := cfg.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
-		log.Error(err, "Token exchange failed")
+		log.Error(err, "Token exchange failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventOIDCTokenExchange)
 		http.Error(w, "Token exchange failed", http.StatusBadGateway)
 		return
 	}
@@ -416,6 +416,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request,
 	}
 
 	if _, err := validator.Validate(r.Context(), rawIDToken); err != nil {
+		log.Info("Invalid ID token after OAuth exchange", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventOIDCInvalidIDToken, "error", err.Error())
 		http.Error(w, "Invalid ID token", http.StatusUnauthorized)
 		return
 	}
@@ -469,7 +470,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request,
 	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
 	if err != nil {
 		http.Error(w, "Failed to provision workspace", http.StatusInternalServerError)
-		log.Error(err, "EnsureExists failed", "user", claims.UserID)
+		log.Error(err, "EnsureExists failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
 		return
 	}
 
@@ -487,6 +488,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request,
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Info("Backend not reachable, serving loading page",
+			gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventHTTPBackendUnreachable,
 			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint, "error", err.Error())
 		serveLoadingPage(w, r, displayName, string(ws.Status.Phase))
 	}
@@ -507,7 +509,7 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	rawToken, err := extractToken(r)
 	if err != nil {
 		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
-		log.Info("Missing token", "remote", r.RemoteAddr)
+		log.Info("Missing token", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventAuthFailure, "remote", r.RemoteAddr)
 		return
 	}
 
@@ -515,13 +517,13 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		st, code := gw.AuthErrorResponse(err)
 		gw.WriteJSONAuthError(w, st, code)
-		log.Info("Token validation failed", "remote", r.RemoteAddr, "status", st)
+		log.Info("Token validation failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventAuthFailure, "remote", r.RemoteAddr, "status", st, "code", code)
 		return
 	}
 
 	ws, err := lifecycle.EnsureWorkspace(r.Context(), namespace, claims)
 	if err != nil {
-		log.Error(err, "EnsureWorkspace failed", "user", claims.UserID)
+		log.Error(err, "EnsureWorkspace failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
 		gw.WriteJSONError(w, http.StatusInternalServerError, gw.WorkspaceErrorCodeUnavailable)
 		return
 	}
@@ -532,13 +534,14 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	// identity path as above — upgrade never happened).
 	if !gw.BackendReady(ws.Status.ServiceEndpoint) {
 		log.Info("Backend not ready yet, returning 503",
+			gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxyBackendNotReady,
 			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint)
 		gw.WriteJSONError(w, http.StatusServiceUnavailable, gw.WorkspaceErrorCodeNotReady)
 		return
 	}
 
 	backendURL := gw.BackendURL(ws.Status.ServiceEndpoint)
-	log.Info("Proxying WebSocket", "user", claims.UserID, "backend", backendURL)
+	log.Info("Proxying WebSocket", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxyStart, "user", claims.UserID, "backend", backendURL)
 
 	// Rate-limited activity callback: update LastAccessed at most once per minute
 	// so the idle-timeout controller sees genuine activity, not the initial timestamp.
@@ -552,7 +555,7 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	if err := proxy.ServeWS(w, r, backendURL, onActivity); err != nil {
-		log.Info("WebSocket session ended", "user", claims.UserID, "reason", err.Error())
+		log.Info("WebSocket session ended", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxySessionEnd, "user", claims.UserID, "reason", err.Error())
 	}
 }
 

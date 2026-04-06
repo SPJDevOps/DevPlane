@@ -1,19 +1,38 @@
 # Default values for workspace-operator.
-# Deploy: helm install workspace-operator . -n workspace-operator-system --create-namespace
+#
+# Deploy (example):
+#   helm install workspace-operator . -n workspace-operator-system --create-namespace -f my-values.yaml
+#
+# --- Production vs lab ---
+# Defaults below target a typical production control plane: enough CPU/RAM for steady reconcile
+# load, gateway HA (2 replicas), and predictable OIDC/workspace behaviour. For a minimal
+# lab cluster you may lower operator/gateway requests (e.g. operator requests cpu 10m,
+# memory 64Mi) — avoid omitting limits entirely in shared clusters.
+#
+# Security-relevant knobs (review before go-live):
+#   gateway.enabled          — false = operator-only (no user-facing OIDC / HTTP).
+#   gateway.oidc.*           — prefer existingSecret in prod (no client secret in Helm state).
+#   gateway.ingress.*        — enable TLS + correct host; must match IdP redirect URLs.
+#   gateway.createWorkspaceNamespace — false if GitOps owns the workspaces namespace.
+#   workspace.ai.egressNamespaces / egressPorts — network boundary for user pods (deny-all NP).
+#   workspace.idleTimeout    — stop idle pods to cap cluster load; empty = no auto-stop.
+#   workspace.defaultCABundle / gateway.tls.customCABundle — trust for private CAs.
+#   operator.leaderElect     — keep true whenever replicas > 1; required for single-replica HA semantics.
 
 operator:
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-operator
     tag: ""
     pullPolicy: IfNotPresent
+  # One replica is normal; leader election still coordinates if you scale up for HA tests.
   replicas: 1
   resources:
     requests:
-      cpu: 10m
-      memory: 64Mi
-    limits:
-      cpu: 500m
+      cpu: 100m
       memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
   leaderElect: true
 
 gateway:
@@ -24,14 +43,15 @@ gateway:
     repository: ghcr.io/spjdevops/devplane/workspace-gateway
     tag: ""
     pullPolicy: IfNotPresent
+  # Two replicas: rolling updates and one-node failure without full outage (session may reconnect).
   replicas: 2
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
       memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
   workspaceNamespace: "workspaces"  # dedicated namespace for user pods/pvcs/services
   createWorkspaceNamespace: true     # create this namespace as part of helm install
   oidc:
@@ -63,6 +83,14 @@ workspace:
     storage: "20Gi"
   storageClass: ""
   ai:
+    # Network egress model (operator → per-Workspace CR):
+    # - Helm sets LLM_NAMESPACES and EGRESS_PORTS on the operator Deployment.
+    # - Each reconcile uses spec.aiConfig when set; otherwise operator env;
+    #   if LLM namespaces are still empty, the reconciler defaults to "ai-system"
+    #   (see pkg/security.ResolveLLMEgressNamespaces). There is no opt-out via
+    #   an empty list today — set explicit namespaces for your LLM services.
+    # - Deny-all NetworkPolicy + separate egress/ingress policies: see README
+    #   "Verifying network isolation" and docs/deployment.md.
     # providers is the list of AI provider backends available to workspace pods.
     # Each entry requires a name (used as the opencode provider key), an endpoint
     # (OpenAI-compatible base URL), and at least one model ID.

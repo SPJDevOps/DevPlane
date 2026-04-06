@@ -2,6 +2,7 @@ package security
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -38,6 +39,51 @@ const (
 //   - 8081  — Nexus repository / Artifactory
 //   - 11434 — Ollama default port
 var DefaultEgressPorts = []int32{22, 80, 443, 5000, 8000, 8080, 8081, 11434}
+
+// DefaultLLMNamespace is the reconciler fallback when neither the Workspace
+// spec nor operator-level LLM_NAMESPACES configures LLM namespaces. It keeps
+// single-namespace installs predictable; override via Helm workspace.ai.egressNamespaces.
+const DefaultLLMNamespace = "ai-system"
+
+// ResolveLLMEgressNamespaces returns namespaces for the LLM egress NetworkPolicy rule.
+// Precedence: non-empty Workspace spec (after trimming entries) > operator env
+// (LLM_NAMESPACES from Helm) > DefaultLLMNamespace.
+func ResolveLLMEgressNamespaces(spec []string, operator []string) []string {
+	if ns := compactNonEmptyStrings(spec); len(ns) > 0 {
+		return ns
+	}
+	if ns := compactNonEmptyStrings(operator); len(ns) > 0 {
+		return ns
+	}
+	return []string{DefaultLLMNamespace}
+}
+
+// ResolveEgressPorts returns TCP ports allowed for 0.0.0.0/0 egress.
+// Precedence: non-empty Workspace spec > operator env (EGRESS_PORTS) >
+// DefaultEgressPorts.
+func ResolveEgressPorts(spec []int32, operator []int32) []int32 {
+	if len(spec) > 0 {
+		out := make([]int32, len(spec))
+		copy(out, spec)
+		return out
+	}
+	if len(operator) > 0 {
+		out := make([]int32, len(operator))
+		copy(out, operator)
+		return out
+	}
+	return append([]int32(nil), DefaultEgressPorts...)
+}
+
+func compactNonEmptyStrings(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if t := strings.TrimSpace(s); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 // netpolName returns a deterministic NetworkPolicy name for a user + suffix.
 func netpolName(userID, suffix string) string {
@@ -151,6 +197,17 @@ func BuildEgressNetworkPolicy(workspace *workspacev1alpha1.Workspace, llmNamespa
 			Protocol: protoPtr(corev1.ProtocolTCP),
 			Port:     port(int(p)),
 		})
+	}
+	// An egress rule with empty Ports matches all ports to the destination CIDR.
+	// Never emit that accidentally when every configured port was invalid.
+	if len(internetPorts) == 0 {
+		log.Info("No valid TCP ports for external egress after validation; falling back to default port list")
+		for _, p := range DefaultEgressPorts {
+			internetPorts = append(internetPorts, networkingv1.NetworkPolicyPort{
+				Protocol: protoPtr(corev1.ProtocolTCP),
+				Port:     port(int(p)),
+			})
+		}
 	}
 	egressRules = append(egressRules, networkingv1.NetworkPolicyEgressRule{
 		Ports: internetPorts,

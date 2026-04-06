@@ -40,6 +40,59 @@ func minimalWorkspace() *workspacev1alpha1.Workspace {
 
 // ── NetworkPolicy tests ───────────────────────────────────────────────────────
 
+func TestResolveLLMEgressNamespaces(t *testing.T) {
+	t.Run("spec wins over operator", func(t *testing.T) {
+		got := ResolveLLMEgressNamespaces([]string{"llm-a"}, []string{"llm-b"})
+		if len(got) != 1 || got[0] != "llm-a" {
+			t.Errorf("got %v, want [llm-a]", got)
+		}
+	})
+	t.Run("operator when spec empty", func(t *testing.T) {
+		got := ResolveLLMEgressNamespaces(nil, []string{"ai-system"})
+		if len(got) != 1 || got[0] != "ai-system" {
+			t.Errorf("got %v, want [ai-system]", got)
+		}
+	})
+	t.Run("default when both empty", func(t *testing.T) {
+		got := ResolveLLMEgressNamespaces(nil, nil)
+		if len(got) != 1 || got[0] != DefaultLLMNamespace {
+			t.Errorf("got %v, want [%s]", got, DefaultLLMNamespace)
+		}
+	})
+	t.Run("spec trims and drops blanks", func(t *testing.T) {
+		got := ResolveLLMEgressNamespaces([]string{"  x  ", "", " "}, nil)
+		if len(got) != 1 || got[0] != "x" {
+			t.Errorf("got %v, want [x]", got)
+		}
+	})
+}
+
+func TestResolveEgressPorts(t *testing.T) {
+	t.Run("spec wins", func(t *testing.T) {
+		got := ResolveEgressPorts([]int32{80}, []int32{443})
+		if len(got) != 1 || got[0] != 80 {
+			t.Errorf("got %v, want [80]", got)
+		}
+	})
+	t.Run("operator when spec empty", func(t *testing.T) {
+		got := ResolveEgressPorts(nil, []int32{443})
+		if len(got) != 1 || got[0] != 443 {
+			t.Errorf("got %v, want [443]", got)
+		}
+	})
+	t.Run("defaults when both empty", func(t *testing.T) {
+		got := ResolveEgressPorts(nil, nil)
+		if len(got) != len(DefaultEgressPorts) {
+			t.Fatalf("len = %d, want %d", len(got), len(DefaultEgressPorts))
+		}
+		for i := range DefaultEgressPorts {
+			if got[i] != DefaultEgressPorts[i] {
+				t.Errorf("got[%d] = %d, want %d", i, got[i], DefaultEgressPorts[i])
+			}
+		}
+	})
+}
+
 func TestBuildDenyAllNetworkPolicy(t *testing.T) {
 	ws := minimalWorkspace()
 	np, err := BuildDenyAllNetworkPolicy(ws, scheme)
@@ -277,6 +330,27 @@ func TestBuildEgressNetworkPolicy_InvalidPortsSkipped(t *testing.T) {
 	}
 	if !portSet[443] || !portSet[22] {
 		t.Errorf("expected ports 22 and 443, got %v", portSet)
+	}
+}
+
+func TestBuildEgressNetworkPolicy_AllInvalidPortsFallsBackToDefault(t *testing.T) {
+	ws := minimalWorkspace()
+	np, err := BuildEgressNetworkPolicy(ws, []string{"ai-system"}, []int32{0, -1, 70000}, scheme)
+	if err != nil {
+		t.Fatalf("BuildEgressNetworkPolicy: %v", err)
+	}
+	internetRule := np.Spec.Egress[2]
+	if len(internetRule.Ports) != len(DefaultEgressPorts) {
+		t.Fatalf("internet rule ports = %d, want len(DefaultEgressPorts)=%d", len(internetRule.Ports), len(DefaultEgressPorts))
+	}
+	want := make(map[int32]bool)
+	for _, p := range DefaultEgressPorts {
+		want[p] = true
+	}
+	for _, p := range internetRule.Ports {
+		if !want[p.Port.IntVal] {
+			t.Errorf("unexpected port %d in fallback rule", p.Port.IntVal)
+		}
 	}
 }
 
