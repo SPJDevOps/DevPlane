@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -329,6 +331,11 @@ func ValidateSpec(workspace *workspacev1alpha1.Workspace) error {
 		}
 		if len(p.Models) == 0 {
 			return fmt.Errorf("spec.aiConfig.providers[%d].models must have at least one entry", i)
+		}
+	}
+	if raw := strings.TrimSpace(s.Lifecycle.IdleTimeout); raw != "" && raw != "0" {
+		if _, err := time.ParseDuration(raw); err != nil {
+			return fmt.Errorf("spec.lifecycle.idleTimeout invalid: %w", err)
 		}
 	}
 	return nil

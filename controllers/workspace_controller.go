@@ -4,6 +4,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,9 +39,10 @@ type WorkspaceReconciler struct {
 	// this via spec.aiConfig.egressPorts.  When empty, security.DefaultEgressPorts
 	// is used.
 	EgressPorts []int32
-	// IdleTimeout is how long a Running workspace may be idle (LastAccessed not
-	// updated) before its pod is deleted and the workspace is set to Stopped.
-	// Zero disables the idle check.
+	// IdleTimeout is the operator default for how long a Running workspace may be
+	// idle (status.lastAccessed not updated) before its pod is deleted and phase
+	// becomes Stopped. Per-workspace override: spec.lifecycle.idleTimeout. Zero
+	// disables the idle check when no per-workspace value is set.
 	IdleTimeout time.Duration
 	// GatewayNamespace is the namespace where gateway pods run (e.g.
 	// "workspace-operator-system").  It is used to add a cross-namespace
@@ -246,12 +248,22 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	serviceEndpoint := fmt.Sprintf("%s.%s.svc.cluster.local", svcName, nn.Namespace)
 
-	// Idle-timeout check: stop the workspace if it has been idle longer than IdleTimeout.
-	if pod.Status.Phase == corev1.PodRunning && isPodReady(&pod) && r.IdleTimeout > 0 {
-		if !ws.Status.LastAccessed.IsZero() &&
-			time.Since(ws.Status.LastAccessed.Time) > r.IdleTimeout {
+	idle := effectiveIdleTimeout(&ws, r.IdleTimeout)
+
+	// Idle-timeout check: stop the workspace if it has been idle longer than the effective timeout.
+	if pod.Status.Phase == corev1.PodRunning && isPodReady(&pod) && idle > 0 {
+		// Gateway normally stamps lastAccessed; seed when missing so CRs created without
+		// the gateway still participate in idle shutdown.
+		if ws.Status.LastAccessed.IsZero() {
+			base := ws.DeepCopy()
+			ws.Status.LastAccessed = metav1.Now()
+			if err := r.Status().Patch(ctx, ws, client.MergeFrom(base)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("seed lastAccessed: %w", err)
+			}
+		}
+		if time.Since(ws.Status.LastAccessed.Time) > idle {
 			log.Info("Workspace idle timeout reached, stopping pod",
-				"workspace", ws.Name, "idleTimeout", r.IdleTimeout)
+				"workspace", ws.Name, "idleTimeout", idle)
 			if err := r.Delete(ctx, &pod); err != nil && !errors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("delete idle pod: %w", err)
 			}
@@ -268,8 +280,8 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, updateErr
 		}
 		// Requeue periodically so the idle-timeout check fires even without events.
-		if r.IdleTimeout > 0 {
-			return ctrl.Result{RequeueAfter: r.IdleTimeout / 4}, nil
+		if idle > 0 {
+			return ctrl.Result{RequeueAfter: idle / 4}, nil
 		}
 		return ctrl.Result{}, nil
 	}
@@ -491,6 +503,23 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1a
 		).Inc()
 	}
 	return nil
+}
+
+// effectiveIdleTimeout returns the idle shutdown window for this workspace.
+// spec.lifecycle.idleTimeout empty inherits the operator default; "0" disables.
+func effectiveIdleTimeout(ws *workspacev1alpha1.Workspace, operatorDefault time.Duration) time.Duration {
+	raw := strings.TrimSpace(ws.Spec.Lifecycle.IdleTimeout)
+	if raw == "" {
+		return operatorDefault
+	}
+	if raw == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return operatorDefault
+	}
+	return d
 }
 
 // isPodReady returns true if the pod has a Ready condition that is true.

@@ -129,6 +129,16 @@ This document describes the design of the AI-powered development workspace opera
   - Data persists across pod restarts; pod spec mounts the PVC to a fixed path (e.g. `/workspace` or `/home/user`).
 - **No shared storage** between users; each workspace has isolated persistent storage.
 
+## 6. Idle shutdown and wake-on-access
+
+**Idle signal:** Activity is tracked via `status.lastAccessed`. The gateway updates it when a user completes OIDC and hits the workspace API, on WebSocket connect, and at a bounded rate while frames flow. The operator also seeds `lastAccessed` the first time a pod is **Running** and ready if the gateway never did (for example Workspace CRs applied directly with `kubectl`).
+
+**Default and per-workspace tuning:** Cluster-wide default comes from the operator `IDLE_TIMEOUT` environment variable (Helm `values.workspace.idleTimeout`, Go duration syntax e.g. `24h`). Optional per-Workspace override: `spec.lifecycle.idleTimeout` — same syntax, empty inherits the operator default, `"0"` disables idle shutdown for that Workspace even when the cluster default is non-zero.
+
+**Scale-down:** When `lastAccessed` is older than the effective idle window and the pod is running, the operator deletes the **Pod** only, sets `status.phase` to **Stopped**, and leaves the **PVC** and **Workspace CR** intact. Data on the volume is preserved.
+
+**Wake path:** On the next browser session, the gateway sees `Stopped`, clears `status.phase` (and related status fields) so the operator reconciler runs again, recreates the pod, and waits until `phase` is **Running** (gateway-side wait is on the order of one minute). The user sees normal workspace availability or gateway error JSON if the workspace fails; no privileged operations are required.
+
 ---
 
 ## Summary

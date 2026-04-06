@@ -31,6 +31,22 @@ var testScheme = func() *runtime.Scheme {
 	return s
 }()
 
+func TestEffectiveIdleTimeout(t *testing.T) {
+	def := time.Hour
+	ws := &workspacev1alpha1.Workspace{}
+	if got := effectiveIdleTimeout(ws, def); got != def {
+		t.Errorf("empty spec = %v, want %v", got, def)
+	}
+	ws.Spec.Lifecycle.IdleTimeout = "0"
+	if got := effectiveIdleTimeout(ws, def); got != 0 {
+		t.Errorf(`"0" = %v, want 0`, got)
+	}
+	ws.Spec.Lifecycle.IdleTimeout = "30m"
+	if got := effectiveIdleTimeout(ws, def); got != 30*time.Minute {
+		t.Errorf(`30m = %v, want 30m`, got)
+	}
+}
+
 func TestIsPodReady(t *testing.T) {
 	tests := []struct {
 		name string
@@ -672,6 +688,79 @@ func TestReconcile_PodStartingNoPhase(t *testing.T) {
 	stored := getWS(t, fc, nn)
 	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseCreating {
 		t.Errorf("status.phase = %q, want Creating", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_IdleTimeout_PerWorkspaceDisabled(t *testing.T) {
+	ws := wsWithFinalizer("idle-off-ws", "ida")
+	ws.Spec.Lifecycle.IdleTimeout = "0"
+	ws.Status.LastAccessed = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "ida-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "ida-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+	r.IdleTimeout = time.Hour
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	var p corev1.Pod
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "ida-workspace-pod", Namespace: "default"}, &p); err != nil {
+		t.Fatalf("expected pod to remain: %v", err)
+	}
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
+		t.Errorf("status.phase = %q, want Running", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_IdleTimeout_SeedsLastAccessed(t *testing.T) {
+	ws := wsWithFinalizer("idle-seed-ws", "igor")
+	// LastAccessed unset — operator should stamp it while running so idle logic can run later.
+	ws.Status.LastAccessed = metav1.Time{}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "igor-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "igor-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+	r.IdleTimeout = time.Hour
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.LastAccessed.IsZero() {
+		t.Error("expected LastAccessed to be seeded when pod is Running")
+	}
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseRunning {
+		t.Errorf("status.phase = %q, want Running", stored.Status.Phase)
 	}
 }
 

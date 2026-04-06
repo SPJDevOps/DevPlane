@@ -142,6 +142,19 @@ spec:
                     - name
                     type: object
                 type: object
+              lifecycle:
+                description: Lifecycle configures optional runtime behavior such as idle
+                  shutdown.
+                properties:
+                  idleTimeout:
+                    description: |-
+                      IdleTimeout is the maximum time a Running workspace may remain without
+                      gateway-reported activity (status.lastAccessed) before the operator deletes
+                      the pod and sets phase to Stopped. Use Go duration syntax (e.g. "24h", "30m").
+                      Empty inherits the operator IDLE_TIMEOUT default (Helm values.workspace.idleTimeout).
+                      Set to "0" to disable idle shutdown for this workspace even when the operator default is non-zero.
+                    type: string
+                type: object
               user:
                 description: User identifies the workspace owner (from OIDC).
                 properties:

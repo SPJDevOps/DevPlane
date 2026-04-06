@@ -453,6 +453,14 @@ func TestValidateSpec_InvalidMemoryQuantity(t *testing.T) {
 	}
 }
 
+func TestValidateSpec_InvalidLifecycleIdleTimeout(t *testing.T) {
+	ws := minimalWorkspace()
+	ws.Spec.Lifecycle.IdleTimeout = "not-a-duration"
+	if err := ValidateSpec(ws); err == nil {
+		t.Error("ValidateSpec: expected error for invalid spec.lifecycle.idleTimeout")
+	}
+}
+
 func TestValidateSpec_InvalidStorageQuantity(t *testing.T) {
 	ws := minimalWorkspace()
 	ws.Spec.Resources.Storage = "not-a-quantity"

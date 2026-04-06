@@ -18,6 +18,20 @@ type WorkspaceSpec struct {
 	// TLS configures custom TLS certificate trust for the workspace.
 	// +optional
 	TLS TLSConfig `json:"tls,omitempty"`
+	// Lifecycle configures optional runtime behavior such as idle shutdown.
+	// +optional
+	Lifecycle WorkspaceLifecycleSpec `json:"lifecycle,omitempty"`
+}
+
+// WorkspaceLifecycleSpec holds optional per-workspace runtime tuning.
+type WorkspaceLifecycleSpec struct {
+	// IdleTimeout is the maximum time a Running workspace may remain without
+	// gateway-reported activity (status.lastAccessed) before the operator deletes
+	// the pod and sets phase to Stopped. Use Go duration syntax (e.g. "24h", "30m").
+	// Empty inherits the operator IDLE_TIMEOUT default (Helm values.workspace.idleTimeout).
+	// Set to "0" to disable idle shutdown for this workspace even when the operator default is non-zero.
+	// +optional
+	IdleTimeout string `json:"idleTimeout,omitempty"`
 }
 
 // UserInfo holds the sanitized user identity from OIDC.

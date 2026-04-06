@@ -131,9 +131,11 @@ workspace:
       - 8080
       - 8081
       - 11434
-  # idleTimeout controls how long a Running workspace may be inactive before its
-  # pod is automatically stopped.  Uses Go duration syntax (e.g. "24h", "8h30m").
-  # Leave empty to disable idle shutdown.
+  # idleTimeout: operator default for how long a Running workspace may be inactive
+  # (no gateway updates to status.lastAccessed) before its pod is stopped. Go
+  # duration syntax (e.g. "24h", "8h30m"). Leave empty to disable unless a Workspace
+  # sets spec.lifecycle.idleTimeout. Per-Workspace: spec.lifecycle.idleTimeout
+  # overrides this; use "0" there to disable idle shutdown for one workspace only.
   idleTimeout: "24h"
   # defaultCABundle: name of a ConfigMap in the workspaces namespace containing
   # custom CA certificates. Applied to all workspace pods when set. Individual
