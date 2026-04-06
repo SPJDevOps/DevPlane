@@ -17,6 +17,7 @@ spec:
       labels:
         {{- include "workspace-operator.gatewaySelectorLabels" . | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Release.Name }}-gateway
       securityContext:
         runAsNonRoot: true
@@ -67,6 +68,22 @@ spec:
           value: {{ .Values.workspace.defaultResources.storage | quote }}
         - name: DEFAULT_STORAGE_CLASS
           value: {{ .Values.workspace.storageClass | quote }}
+        - name: GATEWAY_RL_LIFECYCLE_GLOBAL_RPS
+          value: {{ .Values.gateway.rateLimit.lifecycle.globalRPS | quote }}
+        - name: GATEWAY_RL_LIFECYCLE_GLOBAL_BURST
+          value: {{ .Values.gateway.rateLimit.lifecycle.globalBurst | quote }}
+        - name: GATEWAY_RL_LIFECYCLE_PER_USER_RPS
+          value: {{ .Values.gateway.rateLimit.lifecycle.perUserRPS | quote }}
+        - name: GATEWAY_RL_LIFECYCLE_PER_USER_BURST
+          value: {{ .Values.gateway.rateLimit.lifecycle.perUserBurst | quote }}
+        - name: GATEWAY_RL_WS_GLOBAL_RPS
+          value: {{ .Values.gateway.rateLimit.websocket.globalRPS | quote }}
+        - name: GATEWAY_RL_WS_GLOBAL_BURST
+          value: {{ .Values.gateway.rateLimit.websocket.globalBurst | quote }}
+        - name: GATEWAY_RL_WS_PER_USER_RPS
+          value: {{ .Values.gateway.rateLimit.websocket.perUserRPS | quote }}
+        - name: GATEWAY_RL_WS_PER_USER_BURST
+          value: {{ .Values.gateway.rateLimit.websocket.perUserBurst | quote }}
         {{- if .Values.gateway.tls.customCABundle.configMapName }}
         - name: SSL_CERT_FILE
           value: /etc/ssl/certs/custom/ca-certificates.crt

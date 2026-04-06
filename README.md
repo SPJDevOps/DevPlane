@@ -321,7 +321,8 @@ Scrape Prometheus from both pods. The operator also exposes **kubebuilder/contro
 |--------|--------|---------|
 | `devplane_workspace_phase_transitions_total` | `from_phase`, `to_phase` | Successful `Workspace` status patches where `status.phase` changed (e.g. `Creating` → `Running`). |
 | `devplane_workspace_status_patch_failures_total` | — | Failed writes to the `Workspace` status subresource. |
-| `devplane_gateway_json_api_errors_total` | `http_status`, `error_code` | JSON error responses from the gateway (`unauthorized`, `workspace_not_ready`, …). |
+| `devplane_gateway_json_api_errors_total` | `http_status`, `error_code` | JSON error responses from the gateway (`unauthorized`, `workspace_not_ready`, `rate_limited`, …). |
+| `devplane_gateway_rate_limit_hits_total` | `endpoint` (`lifecycle` / `websocket`), `scope` (`global` / `user`) | Requests rejected by configured gateway rate limits. |
 
 ### Structured logging contract
 
@@ -330,7 +331,8 @@ Both services use **zap** (JSON in production). Prefer filtering on these keys:
 | Key | Used by | Purpose |
 |-----|---------|---------|
 | `devplane.component` | Operator, gateway | `workspace-controller` or `gateway`. |
-| `devplane.event` | Operator, gateway | Stable event name (e.g. `workspace.phase.transition`, `gateway.auth.failure`, `gateway.ws.backend_not_ready`). |
+| `devplane.event` | Operator, gateway | Stable event name (e.g. `workspace.phase.transition`, `gateway.auth.failure`, `gateway.ws.backend_not_ready`, `gateway.rate_limit.exceeded`). |
+| `devplane.request_id` | Gateway | HTTP request correlation id (also returned as `X-Request-ID`). |
 | `workspace`, `namespace`, `userId` | Operator (phase transitions) | Workspace identity. |
 | `fromPhase`, `toPhase` | Operator | Phase transition. |
 | `error` / `msg` | Both | Error detail (never tokens or secrets). |
@@ -345,6 +347,7 @@ Both services use **zap** (JSON in production). Prefer filtering on these keys:
 |---------|----------------|
 | **Login / OIDC** — redirect loop or 502 on `/callback` | Gateway logs for `gateway.oidc.token_exchange.failure` or `gateway.oidc.id_token.invalid`. Verify `OIDC_ISSUER_URL`, client id/secret, redirect URL registered with IdP, and cluster time sync. `kubectl logs deploy/workspace-gateway -n workspace-operator-system` |
 | **401 / `unauthorized` on `/api/workspace` or `/ws`** | `devplane_gateway_json_api_errors_total{error_code="unauthorized"}`. Compare IdP `iss` with `issuerURL`; confirm token not expired. |
+| **429 / `rate_limited`** | Tune `gateway.rateLimit` in Helm (see [docs/deployment.md](./docs/deployment.md#gateway-high-availability-and-rate-limits)). Check `devplane_gateway_rate_limit_hits_total` and logs with `gateway.rate_limit.exceeded`. |
 | **Workspace stuck “spawning”** — phase not `Running` | `kubectl get workspace -n workspaces -o wide` — check `status.phase`, `status.message`. Operator logs for `workspace.phase.transition` to `Failed` or RBAC/NetPol errors. |
 | **Pod not ready** — phase `Running` but no terminal | `kubectl describe pod -n workspaces <user>-workspace-pod` — image pull, mounts, probes. Gateway: `gateway.ws.backend_not_ready` or `workspace_not_ready` until ttyd listens on `7681`. |
 | **WebSocket drops immediately** | Gateway logs `gateway.ws.session.end` and proxy `WebSocket tunnel closed`. Check NetworkPolicy allows gateway namespace → workspace pod port `7681` (`ingress-gateway` policy). |

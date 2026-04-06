@@ -23,6 +23,29 @@ The Helm chart creates the `workspaces` namespace by default (`gateway.createWor
 
 ---
 
+## Gateway high availability and rate limits
+
+**Replicas.** Scale the gateway Deployment with `gateway.replicas` (default `2`). Each replica is stateless: OIDC validation, Workspace CR reads/writes, and WebSocket proxying do not require session affinity to a specific gateway pod. Browsers that lose a connection during a rolling restart can reload or reconnect; the workspace pod is the long-lived endpoint.
+
+**Probes and shutdown.** The chart configures `livenessProbe` and `readinessProbe` on `GET /health`. `terminationGracePeriodSeconds` is set to `30` so in-flight HTTP requests and WebSocket proxies can drain when the pod receives `SIGTERM` (the process calls `http.Server.Shutdown` with a 30s budget).
+
+**Rate limits (abuse controls).** After a successful OIDC token validation, the gateway can apply token-bucket limits to:
+
+- `GET`/`POST` `/api/workspace` (lifecycle polling),
+- `GET` `/ws` (WebSocket terminal connect).
+
+Configure via `gateway.rateLimit.lifecycle` and `gateway.rateLimit.websocket`: each block has `globalRPS`, `globalBurst`, `perUserRPS`, and `perUserBurst`. **Zero means unlimited** for that bucket. Per-user keys use the OIDC `sub` claim. When a limit trips, the gateway returns **HTTP 429** with JSON `{"error":"rate_limited"}`, increments `devplane_gateway_rate_limit_hits_total`, and logs `devplane.event=gateway.rate_limit.exceeded`.
+
+**CI-friendly unit tests** exercise the limiter without sleeps (`pkg/gateway/ratelimit_test.go`). For a manual cluster check, temporarily set `lifecycle.perUserBurst: 1` and `lifecycle.perUserRPS: 1`, then fire two authenticated `GET /api/workspace` calls in a tight loop; expect the second to return 429 until the bucket refills.
+
+**PromQL (examples).**
+
+```promql
+sum(rate(devplane_gateway_rate_limit_hits_total[5m])) by (endpoint, scope)
+```
+
+---
+
 ## Prerequisites
 
 | Requirement | Notes |

@@ -26,7 +26,11 @@ const (
 	EventWSProxyBackendNotReady  = "gateway.ws.backend_not_ready"
 	EventWSProxySessionEnd       = "gateway.ws.session.end"
 	EventHTTPBackendUnreachable  = "gateway.http.backend_unreachable"
+	EventRateLimited             = "gateway.rate_limit.exceeded"
 )
+
+// LogKeyRequestID is the structured-log field for HTTP request correlation.
+const LogKeyRequestID = "devplane.request_id"
 
 var (
 	jsonAPIErrors = promauto.NewCounterVec(
@@ -38,9 +42,23 @@ var (
 		},
 		[]string{"http_status", "error_code"},
 	)
+	rateLimitHits = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "devplane",
+			Subsystem: "gateway",
+			Name:      "rate_limit_hits_total",
+			Help:      "Requests rejected by gateway rate limiting (lifecycle API or WebSocket connect).",
+		},
+		[]string{"endpoint", "scope"},
+	)
 )
 
 // RecordJSONAPIError increments Prometheus counters for a JSON error response.
 func RecordJSONAPIError(httpStatus int, code string) {
 	jsonAPIErrors.WithLabelValues(strconv.Itoa(httpStatus), code).Inc()
+}
+
+// RecordRateLimitHit increments rate-limit rejection counters.
+func RecordRateLimitHit(endpoint, scope string) {
+	rateLimitHits.WithLabelValues(endpoint, scope).Inc()
 }

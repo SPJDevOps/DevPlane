@@ -152,14 +152,17 @@ func main() {
 	})
 	proxy := gw.NewProxy(log)
 
+	lifecycleRL := gw.LoadEndpointLimiterFromEnv("GATEWAY_RL_LIFECYCLE_")
+	wsRL := gw.LoadEndpointLimiterFromEnv("GATEWAY_RL_WS_")
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/api/workspace", func(w http.ResponseWriter, r *http.Request) {
-		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, cookieSecure, log)
+		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, cookieSecure, log, lifecycleRL)
 	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWS(w, r, validator, lifecycle, proxy, namespace, log)
+		handleWS(w, r, validator, lifecycle, proxy, namespace, log, wsRL)
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		handleLogin(w, r, oauth2Cfg, cookieSecure, log)
@@ -302,11 +305,14 @@ type workspaceAPIResponse struct {
 func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 	validator tokenValidator, lifecycle workspaceLifecycle,
 	namespace string, secure bool, log logr.Logger,
+	lifecycleRL *gw.EndpointLimiter,
 ) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	reqID := gw.RequestID(w, r)
+	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	rawToken, err := extractToken(r)
 	if err != nil {
 		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
@@ -324,6 +330,13 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 		})
 		st, code := gw.AuthErrorResponse(err)
 		gw.WriteJSONAuthError(w, st, code)
+		return
+	}
+	if ok, scope := lifecycleRL.Allow(claims.Sub); !ok {
+		gw.RecordRateLimitHit("lifecycle", scope)
+		log.Info("Rate limit exceeded", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventRateLimited,
+			"scope", scope, "user", claims.UserID)
+		gw.WriteJSONError(w, http.StatusTooManyRequests, gw.RateLimitErrorCode)
 		return
 	}
 	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
@@ -505,7 +518,10 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	proxy wsProxy,
 	namespace string,
 	log logr.Logger,
+	wsRL *gw.EndpointLimiter,
 ) {
+	reqID := gw.RequestID(w, r)
+	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	rawToken, err := extractToken(r)
 	if err != nil {
 		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
@@ -518,6 +534,13 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 		st, code := gw.AuthErrorResponse(err)
 		gw.WriteJSONAuthError(w, st, code)
 		log.Info("Token validation failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventAuthFailure, "remote", r.RemoteAddr, "status", st, "code", code)
+		return
+	}
+	if ok, scope := wsRL.Allow(claims.Sub); !ok {
+		gw.RecordRateLimitHit("websocket", scope)
+		log.Info("Rate limit exceeded", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventRateLimited,
+			"scope", scope, "user", claims.UserID)
+		gw.WriteJSONError(w, http.StatusTooManyRequests, gw.RateLimitErrorCode)
 		return
 	}
 

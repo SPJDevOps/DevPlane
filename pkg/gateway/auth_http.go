@@ -14,6 +14,8 @@ const (
 	WorkspaceErrorCodeUnavailable = "workspace_unavailable"
 	// WorkspaceErrorCodeNotReady is returned when the workspace pod is not listening on ttyd yet.
 	WorkspaceErrorCodeNotReady = "workspace_not_ready"
+	// RateLimitErrorCode is returned with HTTP 429 when a gateway rate limit is exceeded.
+	RateLimitErrorCode = "rate_limited"
 )
 
 // WriteJSONAuthError writes {"error": code} with Content-Type application/json.

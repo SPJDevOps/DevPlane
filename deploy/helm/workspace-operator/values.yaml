@@ -45,6 +45,19 @@ gateway:
     pullPolicy: IfNotPresent
   # Two replicas: rolling updates and one-node failure without full outage (session may reconnect).
   replicas: 2
+  # Token-bucket limits (RPS + burst). Zero = unlimited. Applied after OIDC validation using the
+  # subject claim as the per-user key. See README "Observability" and docs/deployment.md.
+  rateLimit:
+    lifecycle:
+      globalRPS: 0
+      globalBurst: 0
+      perUserRPS: 0
+      perUserBurst: 0
+    websocket:
+      globalRPS: 0
+      globalBurst: 0
+      perUserRPS: 0
+      perUserBurst: 0
   resources:
     requests:
       cpu: 100m
