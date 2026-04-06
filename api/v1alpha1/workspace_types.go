@@ -127,6 +127,17 @@ type WorkspaceStatus struct {
 	ServiceEndpoint string `json:"serviceEndpoint,omitempty"`
 	// Message is a human-readable error or info (e.g. validation failure, PVC not bound).
 	Message string `json:"message,omitempty"`
+	// RemediationHint is a short, non-secret operator hint when phase is Failed or
+	// the workspace is not Ready (e.g. verify RBAC, image pull, or storage class).
+	// +optional
+	RemediationHint string `json:"remediationHint,omitempty"`
+	// Conditions represent the current state of the workspace (for example Ready).
+	// +optional
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// LastAccessed is when the workspace was last accessed by the user.
 	LastAccessed metav1.Time `json:"lastAccessed,omitempty"`
 }

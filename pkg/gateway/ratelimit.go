@@ -13,9 +13,9 @@ import (
 type EndpointLimiter struct {
 	global *rate.Limiter
 	// userRPS is the per-identity sustained rate; zero disables per-identity limiting.
-	userRPS  float64
+	userRPS   float64
 	userBurst int
-	users    sync.Map // string -> *rate.Limiter
+	users     sync.Map // string -> *rate.Limiter
 }
 
 // NewEndpointLimiter returns a limiter. Pass globalRPS<=0 to disable the global bucket,

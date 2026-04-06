@@ -124,6 +124,7 @@ func main() {
 	if err = (&controllers.WorkspaceReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("workspace-controller"),
 		WorkspaceImage:   workspaceImage,
 		LLMNamespaces:    llmNamespaces,
 		EgressPorts:      egressPorts,

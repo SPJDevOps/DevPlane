@@ -19,15 +19,15 @@ const ComponentGateway = "gateway"
 
 // Event names for gateway logs.
 const (
-	EventAuthFailure             = "gateway.auth.failure"
-	EventWorkspaceError          = "gateway.workspace.error"
-	EventOIDCTokenExchange       = "gateway.oidc.token_exchange.failure"
-	EventOIDCInvalidIDToken      = "gateway.oidc.id_token.invalid"
-	EventWSProxyStart            = "gateway.ws.proxy.start"
-	EventWSProxyBackendNotReady  = "gateway.ws.backend_not_ready"
-	EventWSProxySessionEnd       = "gateway.ws.session.end"
-	EventHTTPBackendUnreachable  = "gateway.http.backend_unreachable"
-	EventRateLimited             = "gateway.rate_limit.exceeded"
+	EventAuthFailure            = "gateway.auth.failure"
+	EventWorkspaceError         = "gateway.workspace.error"
+	EventOIDCTokenExchange      = "gateway.oidc.token_exchange.failure"
+	EventOIDCInvalidIDToken     = "gateway.oidc.id_token.invalid"
+	EventWSProxyStart           = "gateway.ws.proxy.start"
+	EventWSProxyBackendNotReady = "gateway.ws.backend_not_ready"
+	EventWSProxySessionEnd      = "gateway.ws.session.end"
+	EventHTTPBackendUnreachable = "gateway.http.backend_unreachable"
+	EventRateLimited            = "gateway.rate_limit.exceeded"
 )
 
 // LogKeyRequestID is the structured-log field for HTTP request correlation.

@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
+	"workspace-operator/pkg/workspace"
 )
 
 var testScheme = func() *runtime.Scheme {
@@ -342,6 +344,13 @@ func TestReconcile_InvalidSpec_SetsFailedStatus(t *testing.T) {
 	if ws.Status.Message == "" {
 		t.Error("status.message expected non-empty for invalid spec")
 	}
+	if ws.Status.RemediationHint == "" {
+		t.Error("status.remediationHint expected non-empty for invalid spec")
+	}
+	cond := meta.FindStatusCondition(ws.Status.Conditions, workspace.ConditionTypeReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != workspace.ReasonValidationFailed {
+		t.Fatalf("Ready condition: %#v", cond)
+	}
 }
 
 func TestSetupWithManager_Integration(t *testing.T) {
@@ -510,6 +519,13 @@ func TestReconcile_PVCLost(t *testing.T) {
 	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
 		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
 	}
+	if stored.Status.RemediationHint == "" {
+		t.Error("expected non-empty remediationHint for ClaimLost PVC")
+	}
+	cond := meta.FindStatusCondition(stored.Status.Conditions, workspace.ConditionTypeReady)
+	if cond == nil || cond.Reason != workspace.ReasonPVCLost {
+		t.Fatalf("Ready condition: %#v", cond)
+	}
 }
 
 func TestReconcile_PodFailed(t *testing.T) {
@@ -565,6 +581,13 @@ func TestReconcile_PodUnknown(t *testing.T) {
 	}
 	if stored.Status.Message == "" || !strings.Contains(stored.Status.Message, "Unknown") {
 		t.Errorf("status.message = %q, want failure message mentioning Unknown", stored.Status.Message)
+	}
+	if stored.Status.RemediationHint == "" {
+		t.Error("expected remediationHint for PodUnknown")
+	}
+	cond := meta.FindStatusCondition(stored.Status.Conditions, workspace.ConditionTypeReady)
+	if cond == nil || cond.Reason != workspace.ReasonPodUnknown {
+		t.Fatalf("Ready condition: %#v", cond)
 	}
 }
 
@@ -638,6 +661,13 @@ func TestReconcile_ImagePullBackOff(t *testing.T) {
 	stored := getWS(t, fc, nn)
 	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
 		t.Errorf("status.phase = %q, want Failed (ImagePullBackOff)", stored.Status.Phase)
+	}
+	if stored.Status.RemediationHint == "" {
+		t.Error("expected non-empty remediationHint for ImagePullBackOff")
+	}
+	cond := meta.FindStatusCondition(stored.Status.Conditions, workspace.ConditionTypeReady)
+	if cond == nil || cond.Reason != workspace.ReasonImagePullBackOff {
+		t.Fatalf("Ready condition: %#v", cond)
 	}
 }
 

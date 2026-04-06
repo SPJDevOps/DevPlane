@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -57,11 +58,15 @@ type WorkspaceReconciler struct {
 	PipIndexURL     string
 	PipTrustedHost  string
 	NpmRegistry     string
+	// Recorder emits Kubernetes API events for operator-visible failures (optional).
+	Recorder events.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=workspace.devplane.io,resources=workspaces/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 //+kubebuilder:rbac:groups=core,resources=pods;persistentvolumeclaims;services;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings;roles,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -83,7 +88,12 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if err := workspace.ValidateSpec(&ws); err != nil {
 		log.Error(err, "Invalid Workspace spec")
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+			MessageOverride: err.Error(),
+			RemediationHint: workspace.RemediationValidation,
+			ReadyReason:     workspace.ReasonValidationFailed,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -112,7 +122,15 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Ensure RBAC resources (ServiceAccount, Role, RoleBinding).
 	if err := r.ensureRBAC(ctx, &ws); err != nil {
 		log.Error(err, "Failed to ensure RBAC resources")
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("RBAC reconcile failed: %v", err)); updateErr != nil {
+		hint, rr := workspace.ErrorDetailsForRBAC(err)
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+			PodName:         ws.Status.PodName,
+			ServiceEndpoint: ws.Status.ServiceEndpoint,
+			Message:         fmt.Sprintf("RBAC reconcile failed: %v", err),
+			RemediationHint: hint,
+			ReadyReason:     rr,
+		}); updateErr != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure RBAC: %w (status patch: %v)", err, updateErr)
 		}
 		return ctrl.Result{}, err
@@ -121,7 +139,15 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Ensure NetworkPolicies (deny-all, egress, ingress-from-gateway).
 	if err := r.ensureNetworkPolicies(ctx, &ws); err != nil {
 		log.Error(err, "Failed to ensure NetworkPolicies")
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("NetworkPolicy reconcile failed: %v", err)); updateErr != nil {
+		hint, rr := workspace.ErrorDetailsForNetworkPolicy(err)
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+			PodName:         ws.Status.PodName,
+			ServiceEndpoint: ws.Status.ServiceEndpoint,
+			Message:         fmt.Sprintf("NetworkPolicy reconcile failed: %v", err),
+			RemediationHint: hint,
+			ReadyReason:     rr,
+		}); updateErr != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure NetworkPolicies: %w (status patch: %v)", err, updateErr)
 		}
 		return ctrl.Result{}, err
@@ -132,7 +158,15 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: pvcName}, &pvc); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get PVC")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("Failed to read PersistentVolumeClaim: %v", err)); updateErr != nil {
+			hint, rr := workspace.ErrorDetailsForPVCGet(err)
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+				PodName:         ws.Status.PodName,
+				ServiceEndpoint: ws.Status.ServiceEndpoint,
+				Message:         fmt.Sprintf("Failed to read PersistentVolumeClaim: %v", err),
+				RemediationHint: hint,
+				ReadyReason:     rr,
+			}); updateErr != nil {
 				return ctrl.Result{}, fmt.Errorf("get PVC: %w (status patch: %v)", err, updateErr)
 			}
 			return ctrl.Result{}, err
@@ -140,19 +174,36 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		pvcObj, buildErr := workspace.BuildPVC(&ws, r.Scheme)
 		if buildErr != nil {
 			log.Error(buildErr, "Failed to build PVC")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", buildErr.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+				MessageOverride: buildErr.Error(),
+				RemediationHint: workspace.RemediationValidation,
+				ReadyReason:     workspace.ReasonValidationFailed,
+			}); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
 		}
 		if err := r.Create(ctx, pvcObj); err != nil {
 			log.Error(err, "Failed to create PVC")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
+			hint, rr := workspace.ErrorDetailsForPVCCreate(err)
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+				MessageOverride: err.Error(),
+				RemediationHint: hint,
+				ReadyReason:     rr,
+			}); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
 		}
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, "", "", "PersistentVolumeClaim created; waiting for volume to bind", ""); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+			PodName:         ws.Status.PodName,
+			ServiceEndpoint: ws.Status.ServiceEndpoint,
+			Message:         "PersistentVolumeClaim created; waiting for volume to bind",
+			ReadyReason:     workspace.ReasonProgressing,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		log.Info("Created PVC", "pvc", pvcName)
@@ -164,7 +215,12 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// proceed to pod creation and let Kubernetes resolve the binding.
 	if pvc.Status.Phase == corev1.ClaimLost {
 		msg := "PVC lost — manual intervention required"
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", msg); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+			MessageOverride: msg,
+			RemediationHint: workspace.RemediationPVCLost,
+			ReadyReason:     workspace.ReasonPVCLost,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -180,27 +236,46 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: podName}, &pod); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get Pod")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("Failed to read Pod: %v", err)); updateErr != nil {
+			hint, rr := workspace.ErrorDetailsForPodGet(err)
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+				PodName:         ws.Status.PodName,
+				ServiceEndpoint: ws.Status.ServiceEndpoint,
+				Message:         fmt.Sprintf("Failed to read Pod: %v", err),
+				RemediationHint: hint,
+				ReadyReason:     rr,
+			}); updateErr != nil {
 				return ctrl.Result{}, fmt.Errorf("get Pod: %w (status patch: %v)", err, updateErr)
 			}
 			return ctrl.Result{}, err
 		}
 		podObj, buildErr := workspace.BuildPod(&ws, pvcName, image, r.Scheme, workspace.BuildOpts{
-				DefaultCABundle: r.DefaultCABundle,
-				PipIndexURL:     r.PipIndexURL,
-				PipTrustedHost:  r.PipTrustedHost,
-				NpmRegistry:     r.NpmRegistry,
-			})
+			DefaultCABundle: r.DefaultCABundle,
+			PipIndexURL:     r.PipIndexURL,
+			PipTrustedHost:  r.PipTrustedHost,
+			NpmRegistry:     r.NpmRegistry,
+		})
 		if buildErr != nil {
 			log.Error(buildErr, "Failed to build Pod")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", buildErr.Error()); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+				MessageOverride: buildErr.Error(),
+				RemediationHint: workspace.RemediationValidation,
+				ReadyReason:     workspace.ReasonValidationFailed,
+			}); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
 		}
 		if err := r.Create(ctx, podObj); err != nil {
 			log.Error(err, "Failed to create Pod")
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
+			hint, rr := workspace.ErrorDetailsForPodCreate(err)
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+				MessageOverride: err.Error(),
+				RemediationHint: hint,
+				ReadyReason:     rr,
+			}); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
@@ -240,7 +315,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return controllerutil.SetControllerReference(&ws, svc, r.Scheme)
 	}); err != nil {
 		log.Error(err, "Failed to ensure Service")
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, "", "", "", err.Error()); updateErr != nil {
+		hint, rr := workspace.ErrorDetailsForService(err)
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+			MessageOverride: err.Error(),
+			RemediationHint: hint,
+			ReadyReason:     rr,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -257,7 +338,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if ws.Status.LastAccessed.IsZero() {
 			base := ws.DeepCopy()
 			ws.Status.LastAccessed = metav1.Now()
-			if err := r.Status().Patch(ctx, ws, client.MergeFrom(base)); err != nil {
+			if err := r.Status().Patch(ctx, &ws, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("seed lastAccessed: %w", err)
 			}
 		}
@@ -267,7 +348,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			if err := r.Delete(ctx, &pod); err != nil && !errors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("delete idle pod: %w", err)
 			}
-			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseStopped, "", "", "Workspace stopped due to inactivity", ""); updateErr != nil {
+			if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+				Phase:       workspacev1alpha1.WorkspacePhaseStopped,
+				Message:     "Workspace stopped due to inactivity",
+				ReadyReason: workspace.ReasonStopped,
+			}); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
@@ -276,7 +361,12 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Update status from pod state.
 	if pod.Status.Phase == corev1.PodRunning && isPodReady(&pod) {
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseRunning, podName, serviceEndpoint, "", ""); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseRunning,
+			PodName:         podName,
+			ServiceEndpoint: serviceEndpoint,
+			ReadyReason:     workspace.ReasonRunning,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		// Requeue periodically so the idle-timeout check fires even without events.
@@ -289,7 +379,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check for pod failure conditions.
 	if pod.Status.Phase == corev1.PodFailed {
 		msg := fmt.Sprintf("Pod failed: %s", pod.Status.Reason)
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+			PodName:         podName,
+			MessageOverride: msg,
+			RemediationHint: workspace.RemediationPodFailed,
+			ReadyReason:     workspace.ReasonPodFailed,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -300,7 +396,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if pod.Status.Message != "" {
 			msg = fmt.Sprintf("Pod phase Unknown: %s", pod.Status.Message)
 		}
-		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
+		if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+			Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+			PodName:         podName,
+			MessageOverride: msg,
+			RemediationHint: workspace.RemediationPodUnknown,
+			ReadyReason:     workspace.ReasonPodUnknown,
+		}); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{}, nil
@@ -312,7 +414,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			reason := cs.State.Waiting.Reason
 			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "InvalidImageName" {
 				msg := fmt.Sprintf("Pod stuck: %s — %s", reason, cs.State.Waiting.Message)
-				if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
+				hint, rr := workspace.RemediationForPodWaitingReason(reason)
+				if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+					Phase:           workspacev1alpha1.WorkspacePhaseFailed,
+					PodName:         podName,
+					MessageOverride: msg,
+					RemediationHint: hint,
+					ReadyReason:     rr,
+				}); updateErr != nil {
 					return ctrl.Result{}, updateErr
 				}
 				return ctrl.Result{}, nil
@@ -325,7 +434,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if pod.Status.Phase != "" {
 		msg = fmt.Sprintf("Pod phase: %s", pod.Status.Phase)
 	}
-	if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, podName, serviceEndpoint, msg, ""); updateErr != nil {
+	if updateErr := r.updateStatus(ctx, &ws, workspace.StatusSummary{
+		Phase:           workspacev1alpha1.WorkspacePhaseCreating,
+		PodName:         podName,
+		ServiceEndpoint: serviceEndpoint,
+		Message:         msg,
+		ReadyReason:     workspace.ReasonProgressing,
+	}); updateErr != nil {
 		return ctrl.Result{}, updateErr
 	}
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -480,27 +595,27 @@ func (r *WorkspaceReconciler) ensureNetworkPolicies(ctx context.Context, ws *wor
 // updateStatus sets the Workspace status fields and patches via the status
 // subresource.  Patch is used instead of Update to avoid clobbering fields
 // owned by other controllers (e.g. the gateway writes LastAccessed).
-func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1alpha1.Workspace, phase workspacev1alpha1.WorkspacePhase, podName, serviceEndpoint, message, messageOverride string) error {
-	msg := message
-	if messageOverride != "" {
-		msg = messageOverride
-	}
+func (r *WorkspaceReconciler) updateStatus(ctx context.Context, ws *workspacev1alpha1.Workspace, sum workspace.StatusSummary) error {
 	base := ws.DeepCopy()
 	oldPhase := base.Status.Phase
-	ws.Status.Phase = phase
-	ws.Status.PodName = podName
-	ws.Status.ServiceEndpoint = serviceEndpoint
-	ws.Status.Message = msg
+	workspace.ApplyStatusSummary(ws, sum)
 	if err := r.Status().Patch(ctx, ws, client.MergeFrom(base)); err != nil {
 		observability.WorkspaceStatusPatchFailures.Inc()
 		return err
 	}
-	if oldPhase != phase {
-		observability.LogWorkspacePhaseTransition(log.FromContext(ctx), ws, oldPhase, phase, podName, serviceEndpoint, msg)
+	if oldPhase != sum.Phase {
+		observability.LogWorkspacePhaseTransition(log.FromContext(ctx), ws, oldPhase, sum.Phase, sum.PodName, sum.ServiceEndpoint, ws.Status.Message)
 		observability.WorkspacePhaseTransitions.WithLabelValues(
 			observability.PhaseLabel(string(oldPhase)),
-			observability.PhaseLabel(string(phase)),
+			observability.PhaseLabel(string(sum.Phase)),
 		).Inc()
+	}
+	if r.Recorder != nil && sum.Phase == workspacev1alpha1.WorkspacePhaseFailed && oldPhase != sum.Phase {
+		reason := sum.ReadyReason
+		if reason == "" {
+			reason = workspace.ReasonFailed
+		}
+		r.Recorder.Eventf(ws, nil, corev1.EventTypeWarning, reason, "WorkspacePhaseFailed", "%s", ws.Status.Message)
 	}
 	return nil
 }

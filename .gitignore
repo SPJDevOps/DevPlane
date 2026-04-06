@@ -8,6 +8,7 @@ cover.out
 *.test
 
 # ── Go toolchain ──────────────────────────────────────────────────────────────
+.toolchain/
 vendor/
 # Go workspace files (local multi-module dev, not shared)
 go.work
