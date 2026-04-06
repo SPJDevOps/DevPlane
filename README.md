@@ -296,6 +296,8 @@ go test -run TestBuildPod ./pkg/workspace
 
 For a full local walkthrough (workspace image with Docker, full stack with KIND), see [docs/local-development.md](./docs/local-development.md).
 
+To publish commits to GitHub (credentials, branch protection, air-gapped options, and how that relates to CI), see [docs/github-publish.md](./docs/github-publish.md).
+
 ### Directory layout
 
 ```
