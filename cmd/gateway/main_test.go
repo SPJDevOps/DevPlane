@@ -363,16 +363,46 @@ func TestHandleWS_MissingToken(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
 	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.AuthErrorCodeUnauthorized {
+		t.Errorf("error = %q, want %q", body["error"], gw.AuthErrorCodeUnauthorized)
+	}
 }
 
 func TestHandleWS_InvalidToken(t *testing.T) {
 	w := httptest.NewRecorder()
 
-	v := &stubValidator{err: errors.New("invalid token")}
+	v := &stubValidator{err: fmt.Errorf("%w: invalid", gw.ErrUnauthorized)}
 	handleWS(w, wsRequest("badtoken"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog())
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.AuthErrorCodeUnauthorized {
+		t.Errorf("error = %q, want unauthorized", body["error"])
+	}
+}
+
+func TestHandleWS_ForbiddenAudience(t *testing.T) {
+	w := httptest.NewRecorder()
+	v := &stubValidator{err: fmt.Errorf("%w: aud", gw.ErrForbidden)}
+	handleWS(w, wsRequest("tok"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog())
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.AuthErrorCodeForbidden {
+		t.Errorf("error = %q, want forbidden", body["error"])
 	}
 }
 
@@ -705,10 +735,28 @@ func TestHandleWorkspaceAPI_InvalidTokenJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
 	r.Header.Set("Authorization", "Bearer bad")
-	v := &stubValidator{err: errors.New("invalid")}
+	v := &stubValidator{err: fmt.Errorf("%w: invalid", gw.ErrUnauthorized)}
 	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog())
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestHandleWorkspaceAPI_ForbiddenJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	v := &stubValidator{err: fmt.Errorf("%w: aud mismatch", gw.ErrForbidden)}
+	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog())
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.AuthErrorCodeForbidden {
+		t.Errorf("error = %q, want forbidden", body["error"])
 	}
 }
 

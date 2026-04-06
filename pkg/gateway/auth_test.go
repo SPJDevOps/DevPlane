@@ -3,12 +3,18 @@ package gateway
 import (
 	"container/list"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
 )
 
 func TestSanitizeUserID(t *testing.T) {
@@ -82,6 +88,174 @@ func TestNewValidator(t *testing.T) {
 	}
 	if v == nil {
 		t.Fatal("NewValidator returned nil")
+	}
+}
+
+func TestValidate_WithMockJWKS(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("RSA key: %v", err)
+	}
+	const kid = "test-kid"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		issuer := "http://" + r.Host
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/auth",
+				"token_endpoint":         issuer + "/token",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			pub := jose.JSONWebKey{Key: priv.Public(), KeyID: kid, Algorithm: string(jose.RS256), Use: "sig"}
+			set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{pub}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(set)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	issuer := srv.URL
+	now := time.Now()
+	claims := map[string]any{
+		"iss":   issuer,
+		"sub":   "alice",
+		"aud":   "gw-client",
+		"email": "alice@example.com",
+		"exp":   now.Add(time.Hour).Unix(),
+		"iat":   now.Unix(),
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: priv},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), kid),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	v, err := NewValidatorWithOIDC(ctx, OIDCConfig{IssuerURL: issuer, ClientID: "unused", Audience: "gw-client"})
+	if err != nil {
+		t.Fatalf("NewValidatorWithOIDC: %v", err)
+	}
+
+	got, err := v.Validate(ctx, rawToken)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got.Sub != "alice" || got.Email != "alice@example.com" || got.UserID != "alice" {
+		t.Fatalf("claims = %#v", got)
+	}
+}
+
+func TestValidate_WrongAudience_ReturnsForbidden(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("RSA key: %v", err)
+	}
+	const kid = "test-kid"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		issuer := "http://" + r.Host
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/auth",
+				"token_endpoint":         issuer + "/token",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			pub := jose.JSONWebKey{Key: priv.Public(), KeyID: kid, Algorithm: string(jose.RS256), Use: "sig"}
+			set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{pub}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(set)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	issuer := srv.URL
+	now := time.Now()
+	claims := map[string]any{
+		"iss": issuer,
+		"sub": "alice",
+		"aud": "other-app",
+		"exp": now.Add(time.Hour).Unix(),
+		"iat": now.Unix(),
+	}
+	payload, _ := json.Marshal(claims)
+	signer, _ := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: priv},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), kid),
+	)
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	v, err := NewValidatorWithOIDC(ctx, OIDCConfig{IssuerURL: issuer, ClientID: "unused", Audience: "gw-client"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = v.Validate(ctx, rawToken)
+	if err == nil {
+		t.Fatal("expected error for wrong audience")
+	}
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestAuthErrorResponse(t *testing.T) {
+	st, code := AuthErrorResponse(fmt.Errorf("wrap: %w", ErrUnauthorized))
+	if st != http.StatusUnauthorized || code != AuthErrorCodeUnauthorized {
+		t.Fatalf("unauthorized: status=%d code=%q", st, code)
+	}
+	st, code = AuthErrorResponse(fmt.Errorf("wrap: %w", ErrForbidden))
+	if st != http.StatusForbidden || code != AuthErrorCodeForbidden {
+		t.Fatalf("forbidden: status=%d code=%q", st, code)
+	}
+}
+
+func TestFixedIdentityValidator(t *testing.T) {
+	v := NewFixedIdentityValidator("my-sub", "u@example.org")
+	_, err := v.Validate(context.Background(), "")
+	if err == nil || !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("empty token: %v", err)
+	}
+	c, err := v.Validate(context.Background(), "any-non-empty")
+	if err != nil || c.Sub != "my-sub" || c.Email != "u@example.org" {
+		t.Fatalf("claims: %#v err=%v", c, err)
 	}
 }
 

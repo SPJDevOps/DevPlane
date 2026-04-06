@@ -51,6 +51,10 @@ spec:
             secretKeyRef:
               name: {{ .Values.gateway.oidc.existingSecret | default (printf "%s-gateway-oidc" .Release.Name) }}
               key: redirect-url
+        {{- if .Values.gateway.oidc.audience }}
+        - name: OIDC_AUDIENCE
+          value: {{ .Values.gateway.oidc.audience | quote }}
+        {{- end }}
         - name: NAMESPACE
           value: {{ .Values.gateway.workspaceNamespace | default .Release.Namespace | quote }}
         - name: AI_PROVIDERS_JSON

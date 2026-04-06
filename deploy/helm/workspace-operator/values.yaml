@@ -39,6 +39,8 @@ gateway:
     clientID: ""
     clientSecret: ""   # OIDC client secret for authorization code flow
     redirectURL: ""    # Full callback URL, e.g. https://devplane.example.com/callback
+    # Optional JWT audience when it differs from clientID (defaults to clientID).
+    audience: ""
     # Name of an existing Secret with keys: issuer-url, client-id, client-secret, redirect-url.
     # If set, oidc.issuerURL / clientID / clientSecret / redirectURL are ignored.
     existingSecret: ""

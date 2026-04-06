@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -13,6 +14,22 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 )
+
+// ErrUnauthorized means the request is not authenticated (missing/invalid token).
+var ErrUnauthorized = errors.New("unauthenticated")
+
+// ErrForbidden means the caller presented a syntactically plausible token that is
+// not permitted for this application (for example audience mismatch).
+var ErrForbidden = errors.New("forbidden")
+
+// OIDCConfig configures JWT validation against an OIDC issuer discovered at IssuerURL.
+// ClientID is the OAuth2 client identifier used for the browser authorization-code flow.
+// Audience is the expected JWT "aud" claim; when empty it defaults to ClientID.
+type OIDCConfig struct {
+	IssuerURL string
+	ClientID  string
+	Audience  string
+}
 
 const (
 	tokenCacheTTL = 5 * time.Minute
@@ -70,17 +87,41 @@ func sanitizeUserID(sub string) string {
 // It performs OIDC discovery to fetch the provider's JWKS endpoint.
 // A background goroutine evicts expired cache entries every tokenCacheTTL.
 func NewValidator(ctx context.Context, issuerURL, clientID string) (*Validator, error) {
-	provider, err := gooidc.NewProvider(ctx, issuerURL)
+	return NewValidatorWithOIDC(ctx, OIDCConfig{IssuerURL: issuerURL, ClientID: clientID})
+}
+
+// NewValidatorWithOIDC is like NewValidator but allows a distinct JWT audience (see OIDCConfig).
+func NewValidatorWithOIDC(ctx context.Context, cfg OIDCConfig) (*Validator, error) {
+	if cfg.IssuerURL == "" || cfg.ClientID == "" {
+		return nil, fmt.Errorf("OIDC IssuerURL and ClientID are required")
+	}
+	audience := cfg.Audience
+	if audience == "" {
+		audience = cfg.ClientID
+	}
+	provider, err := gooidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
-		return nil, fmt.Errorf("OIDC provider discovery %q: %w", issuerURL, err)
+		return nil, fmt.Errorf("OIDC provider discovery %q: %w", cfg.IssuerURL, err)
 	}
 	v := &Validator{
-		verifier: provider.Verifier(&gooidc.Config{ClientID: clientID}),
+		verifier: provider.Verifier(&gooidc.Config{ClientID: audience}),
 		index:    make(map[string]*list.Element),
 		lru:      list.New(),
 	}
 	go v.evictExpired(ctx)
 	return v, nil
+}
+
+func classifyOIDCVerifyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	// oidc reports audience mismatches as verification failures — treat as 403.
+	if strings.Contains(msg, "aud") || strings.Contains(msg, "audience") {
+		return fmt.Errorf("%w: %v", ErrForbidden, err)
+	}
+	return fmt.Errorf("%w: %v", ErrUnauthorized, err)
 }
 
 // evictExpired periodically removes expired entries from the token cache.
@@ -127,14 +168,14 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 
 	idToken, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return nil, fmt.Errorf("verify token: %w", err)
+		return nil, classifyOIDCVerifyError(err)
 	}
 
 	var raw struct {
 		Email string `json:"email"`
 	}
 	if err := idToken.Claims(&raw); err != nil {
-		return nil, fmt.Errorf("extract claims: %w", err)
+		return nil, fmt.Errorf("%w: extract claims: %v", ErrUnauthorized, err)
 	}
 
 	claims := &Claims{

@@ -92,12 +92,31 @@ func main() {
 
 	ctx := ctrl.SetupSignalHandler()
 
-	validator, err := gw.NewValidator(ctx, issuerURL, clientID)
-	if err != nil {
-		log.Error(err, "Failed to initialize OIDC validator")
-		os.Exit(1)
+	var validator tokenValidator
+	if os.Getenv("GATEWAY_DEV_INSECURE_FIXED_IDENTITY") == "1" {
+		devSub := envOr("GATEWAY_DEV_USER_SUB", "dev-user")
+		devEmail := envOr("GATEWAY_DEV_USER_EMAIL", "dev@localhost")
+		validator = gw.NewFixedIdentityValidator(devSub, devEmail)
+		log.Info("DEV ONLY: fixed-identity auth enabled; OIDC JWT verification is disabled",
+			"devUserSub", devSub)
+	} else {
+		audienceOverride := strings.TrimSpace(os.Getenv("OIDC_AUDIENCE"))
+		v, err := gw.NewValidatorWithOIDC(ctx, gw.OIDCConfig{
+			IssuerURL: issuerURL,
+			ClientID:  clientID,
+			Audience:  audienceOverride,
+		})
+		if err != nil {
+			log.Error(err, "Failed to initialize OIDC validator")
+			os.Exit(1)
+		}
+		validator = v
+		effectiveAud := audienceOverride
+		if effectiveAud == "" {
+			effectiveAud = clientID
+		}
+		log.Info("OIDC validator ready", "issuer", issuerURL, "audience", effectiveAud)
 	}
-	log.Info("OIDC validator ready", "issuer", issuerURL)
 
 	oidcProvider, err := gooidc.NewProvider(ctx, issuerURL)
 	if err != nil {
@@ -286,9 +305,7 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 	}
 	rawToken, err := extractToken(r)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		return
 	}
 	claims, err := validator.Validate(r.Context(), rawToken)
@@ -301,9 +318,8 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 			HttpOnly: true,
 			Secure:   secure,
 		})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		st, code := gw.AuthErrorResponse(err)
+		gw.WriteJSONAuthError(w, st, code)
 		return
 	}
 	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
@@ -488,15 +504,16 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 ) {
 	rawToken, err := extractToken(r)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		log.Info("Missing token", "remote", r.RemoteAddr)
 		return
 	}
 
 	claims, err := validator.Validate(r.Context(), rawToken)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		log.Info("Invalid token", "remote", r.RemoteAddr, "error", err.Error())
+		st, code := gw.AuthErrorResponse(err)
+		gw.WriteJSONAuthError(w, st, code)
+		log.Info("Token validation failed", "remote", r.RemoteAddr, "status", st)
 		return
 	}
 
