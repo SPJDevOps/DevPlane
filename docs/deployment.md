@@ -719,14 +719,15 @@ kubectl logs -n workspaces <userid>-workspace-pod
 - CRD `workspaces.workspace.devplane.io` exists
 - Deployments `{release}-controller-manager` and `{release}-gateway` in the install namespace roll out successfully
 - The `workspaces` namespace exists (chart default)
+- **Workspace reconcile:** applies sample CR [ci-smoke-workspace.yaml](../deploy/helm/ci-smoke-workspace.yaml) in `workspaces` and waits up to **10 minutes** for `status.phase=Running`. If the phase becomes `Failed` or the wait times out, the job fails and prints `kubectl describe` / recent events so breaks in the operator reconcile path are obvious in CI logs.
 
 **Runner requirements:** Standard GitHub-hosted `ubuntu-latest` (Docker-in-Docker for kind). No extra secrets are required; images pull from the public `ghcr.io/spjdevops/devplane/*` repositories pinned by chart `appVersion`.
 
 **OIDC in CI:** `ci-smoke-values.yaml` points `gateway.oidc.issuerURL` at a **public** issuer (`https://accounts.google.com`) so the gateway can complete OIDC discovery on startup (required for the process to stay up). Client credentials are dummy values; the job validates **installability** and **pod readiness**, not a full browser login flow.
 
-**Flake policy:** Transient kind or registry failures should be rare. **Re-run the failed workflow job** once before investigating. Repeated failures on the same commit usually indicate a chart regression, broken image tag, or incompatible default resources.
+**Flake policy:** Transient kind or registry failures should be rare. **Re-run the failed workflow job** once before investigating. Repeated failures on the same commit usually indicate a chart regression, broken image tag, or incompatible default resources. Workspace reconcile timeouts (pod scheduling, image pull, or PVC binding) can occasionally spike on busy runners — use the same **one re-run** rule; if the failure repeats, inspect `kubectl describe workspace` / pod / PVC output from the job log before changing timeouts.
 
-**Maintenance:** When gateway OIDC becomes required differently, or deployment names change, update `deploy/helm/ci-smoke-values.yaml` and the assertions in `helm-smoke.yml` together. Keep [helm/kind-action](https://github.com/helm/kind-action) and `azure/setup-helm` versions aligned with other workflows (or let Dependabot propose bumps).
+**Maintenance:** When gateway OIDC becomes required differently, or deployment names change, update `deploy/helm/ci-smoke-values.yaml` and the assertions in `helm-smoke.yml` together. When the `Workspace` API or sample spec fields change, update [ci-smoke-workspace.yaml](../deploy/helm/ci-smoke-workspace.yaml) in lockstep. Keep [helm/kind-action](https://github.com/helm/kind-action) and `azure/setup-helm` versions aligned with other workflows (or let Dependabot propose bumps).
 
 ---
 

@@ -1,0 +1,29 @@
+# Minimal Workspace for CI Helm smoke (`.github/workflows/helm-smoke.yml`).
+# Applied after chart install; operator must reconcile to Running within the job timeout.
+# Keep resources small so a single-node kind cluster stays within CI limits.
+
+apiVersion: workspace.devplane.io/v1alpha1
+kind: Workspace
+metadata:
+  name: ci-smoke
+  namespace: workspaces
+  labels:
+    app: workspace
+    user: ci-smoke
+    managed-by: workspace-operator
+spec:
+  user:
+    id: ci-smoke
+    email: ci-smoke@example.com
+  resources:
+    cpu: "500m"
+    memory: "512Mi"
+    storage: "1Gi"
+  aiConfig:
+    providers:
+      - name: local
+        endpoint: "http://vllm.ci-placeholder.svc.cluster.local:8000"
+        models:
+          - placeholder
+  persistence:
+    storageClass: standard

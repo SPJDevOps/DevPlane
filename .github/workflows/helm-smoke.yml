@@ -62,3 +62,35 @@ jobs:
           kubectl rollout status deployment/devplane-smoke-gateway -n devplane-ci --timeout=5m
           kubectl get deploy -n devplane-ci
           kubectl get ns workspaces
+
+      - name: Workspace reconcile smoke (CR → Running)
+        run: |
+          set -euo pipefail
+          kubectl apply -f deploy/helm/ci-smoke-workspace.yaml
+          deadline=$((SECONDS + 600))
+          while [ "${SECONDS:-0}" -lt "$deadline" ]; do
+            phase=$(kubectl get workspace ci-smoke -n workspaces -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            case "$phase" in
+              Running)
+                echo "Workspace ci-smoke reached phase=Running"
+                kubectl get workspace ci-smoke -n workspaces -o wide
+                exit 0
+                ;;
+              Failed)
+                echo "::error::Workspace ci-smoke entered Failed phase"
+                kubectl get workspace ci-smoke -n workspaces -o yaml || true
+                kubectl describe workspace ci-smoke -n workspaces || true
+                kubectl get events -n workspaces --sort-by=.lastTimestamp | tail -40 || true
+                exit 1
+                ;;
+              *)
+                sleep 5
+                ;;
+            esac
+          done
+          echo "::error::Timed out after 10m waiting for Workspace ci-smoke phase=Running (last phase=${phase:-<empty>})"
+          kubectl get workspace ci-smoke -n workspaces -o yaml || true
+          kubectl describe workspace ci-smoke -n workspaces || true
+          kubectl describe pods -n workspaces -l 'app=workspace,user=ci-smoke' || true
+          kubectl get events -n workspaces --sort-by=.lastTimestamp | tail -40 || true
+          exit 1
