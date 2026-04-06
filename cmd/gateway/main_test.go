@@ -358,7 +358,7 @@ func TestHandleWS_MissingToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/ws", nil) // no token
 
-	handleWS(w, r, &stubValidator{}, &stubLifecycle{}, &stubProxy{}, "default", discardLog())
+	handleWS(w, r, &stubValidator{}, &stubLifecycle{}, &stubProxy{}, "default", discardLog(), nil)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
@@ -376,7 +376,7 @@ func TestHandleWS_InvalidToken(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	v := &stubValidator{err: fmt.Errorf("%w: invalid", gw.ErrUnauthorized)}
-	handleWS(w, wsRequest("badtoken"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("badtoken"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog(), nil)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
@@ -393,7 +393,7 @@ func TestHandleWS_InvalidToken(t *testing.T) {
 func TestHandleWS_ForbiddenAudience(t *testing.T) {
 	w := httptest.NewRecorder()
 	v := &stubValidator{err: fmt.Errorf("%w: aud", gw.ErrForbidden)}
-	handleWS(w, wsRequest("tok"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("tok"), v, &stubLifecycle{}, &stubProxy{}, "default", discardLog(), nil)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
@@ -411,7 +411,7 @@ func TestHandleWS_WorkspaceProvisionFails(t *testing.T) {
 
 	v := &stubValidator{claims: &gw.Claims{Sub: "u1", Email: "u1@test.com", UserID: "u1"}}
 	lc := &stubLifecycle{err: errors.New("workspace failed")}
-	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog(), nil)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
@@ -452,7 +452,7 @@ func TestHandleWS_StoppedWorkspaceRecovery(t *testing.T) {
 	ws.Status.ServiceEndpoint = "127.0.0.1"
 	// EnsureWorkspace succeeds (lifecycle manager internally restarted the stopped workspace).
 	lc := &stubLifecycle{ws: ws}
-	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog(), nil)
 
 	// Expect the proxy to have been called (stub writes 101).
 	if w.Code == http.StatusInternalServerError {
@@ -483,7 +483,7 @@ func TestHandleWS_HappyPath(t *testing.T) {
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
 	ws.Status.ServiceEndpoint = "127.0.0.1"
 	lc := &stubLifecycle{ws: ws}
-	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog(), nil)
 
 	// stubProxy writes 101; no 4xx or 5xx from handleWS itself.
 	if w.Code >= 400 {
@@ -500,7 +500,7 @@ func TestHandleWS_BackendNotReady_Returns503(t *testing.T) {
 	// 127.0.0.1:7681 not listening → BackendReady returns false immediately.
 	ws.Status.ServiceEndpoint = "127.0.0.1"
 	lc := &stubLifecycle{ws: ws}
-	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog())
+	handleWS(w, wsRequest("validtoken"), v, lc, &stubProxy{}, "default", discardLog(), nil)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", w.Code)
@@ -723,7 +723,7 @@ func TestServeLoadingPage_Status200(t *testing.T) {
 func TestHandleWorkspaceAPI_MethodNotAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/workspace", nil)
-	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog(), nil)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
 	}
@@ -739,7 +739,7 @@ func TestHandleWorkspaceAPI_POST_OK(t *testing.T) {
 	}
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
 	lc := &stubLifecycle{existsWs: ws}
-	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog(), nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -755,7 +755,7 @@ func TestHandleWorkspaceAPI_POST_OK(t *testing.T) {
 func TestHandleWorkspaceAPI_UnauthorizedNoToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
-	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog(), nil)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
 	}
@@ -773,7 +773,7 @@ func TestHandleWorkspaceAPI_InvalidTokenJSON(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
 	r.Header.Set("Authorization", "Bearer bad")
 	v := &stubValidator{err: fmt.Errorf("%w: invalid", gw.ErrUnauthorized)}
-	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog(), nil)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
 	}
@@ -784,7 +784,7 @@ func TestHandleWorkspaceAPI_ForbiddenJSON(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
 	r.Header.Set("Authorization", "Bearer tok")
 	v := &stubValidator{err: fmt.Errorf("%w: aud mismatch", gw.ErrForbidden)}
-	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, &stubLifecycle{}, "default", false, discardLog(), nil)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
@@ -803,7 +803,7 @@ func TestHandleWorkspaceAPI_EnsureExistsFails(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer tok")
 	v := &stubValidator{claims: validClaims()}
 	lc := &stubLifecycle{existsErr: errors.New("k8s down")}
-	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog(), nil)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
 	}
@@ -820,7 +820,7 @@ func TestHandleWorkspaceAPI_OK(t *testing.T) {
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
 	ws.Status.Message = "waiting"
 	lc := &stubLifecycle{existsWs: ws}
-	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog(), nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -868,7 +868,7 @@ func TestHandleWorkspaceAPI_TTYDReadyTrue(t *testing.T) {
 	ws.Status.Phase = workspacev1alpha1.WorkspacePhaseRunning
 	ws.Status.ServiceEndpoint = "127.0.0.1"
 	lc := &stubLifecycle{existsWs: ws}
-	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog(), nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -878,5 +878,71 @@ func TestHandleWorkspaceAPI_TTYDReadyTrue(t *testing.T) {
 	}
 	if !got.TTYDReady {
 		t.Error("TTYDReady = false, want true when backend accepts TCP")
+	}
+}
+
+// TestHandleWorkspaceAPI_RateLimited verifies the lifecycle JSON API returns HTTP 429 with
+// {"error":"rate_limited"} once the configured (non-nil) limiter rejects a request after OIDC
+// validation. Uses a global token bucket (1 RPS, burst 1): first request passes the limiter
+// then fails downstream; second hits the limiter first.
+func TestHandleWorkspaceAPI_RateLimited(t *testing.T) {
+	rl := gw.NewEndpointLimiter(1, 1, 0, 0)
+	v := &stubValidator{claims: validClaims()}
+	lc := &stubLifecycle{existsErr: errors.New("downstream")}
+
+	r1 := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r1.Header.Set("Authorization", "Bearer tok")
+	w1 := httptest.NewRecorder()
+	handleWorkspaceAPI(w1, r1, v, lc, "default", false, discardLog(), rl)
+	if w1.Code != http.StatusInternalServerError {
+		t.Fatalf("first request status = %d, want 500 (past rate limit, downstream error)", w1.Code)
+	}
+
+	r2 := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r2.Header.Set("Authorization", "Bearer tok")
+	w2 := httptest.NewRecorder()
+	handleWorkspaceAPI(w2, r2, v, lc, "default", false, discardLog(), rl)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429", w2.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w2.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.RateLimitErrorCode {
+		t.Errorf("error = %q, want %q", body["error"], gw.RateLimitErrorCode)
+	}
+	if w2.Header().Get("X-Request-ID") == "" {
+		t.Error("expected X-Request-ID header on rate-limited response")
+	}
+}
+
+// TestHandleWS_RateLimited verifies the WebSocket handler returns JSON 429 before upgrade when
+// the WebSocket connect limiter trips (same global 1/1 pattern as TestHandleWorkspaceAPI_RateLimited).
+func TestHandleWS_RateLimited(t *testing.T) {
+	rl := gw.NewEndpointLimiter(1, 1, 0, 0)
+	v := &stubValidator{claims: &gw.Claims{Sub: "u1", Email: "u1@test.com", UserID: "u1"}}
+	lc := &stubLifecycle{err: errors.New("downstream")}
+
+	w1 := httptest.NewRecorder()
+	handleWS(w1, wsRequest("a"), v, lc, &stubProxy{}, "default", discardLog(), rl)
+	if w1.Code != http.StatusInternalServerError {
+		t.Fatalf("first request status = %d, want 500", w1.Code)
+	}
+
+	w2 := httptest.NewRecorder()
+	handleWS(w2, wsRequest("a"), v, lc, &stubProxy{}, "default", discardLog(), rl)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429", w2.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w2.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.RateLimitErrorCode {
+		t.Errorf("error = %q, want %q", body["error"], gw.RateLimitErrorCode)
+	}
+	if w2.Header().Get("X-Request-ID") == "" {
+		t.Error("expected X-Request-ID header on rate-limited response")
 	}
 }
