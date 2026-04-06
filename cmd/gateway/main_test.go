@@ -416,6 +416,13 @@ func TestHandleWS_WorkspaceProvisionFails(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
 	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.WorkspaceErrorCodeUnavailable {
+		t.Errorf("error = %q, want %q", body["error"], gw.WorkspaceErrorCodeUnavailable)
+	}
 }
 
 // TestHandleWS_StoppedWorkspaceRecovery verifies that when EnsureWorkspace
@@ -497,6 +504,13 @@ func TestHandleWS_BackendNotReady_Returns503(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.WorkspaceErrorCodeNotReady {
+		t.Errorf("error = %q, want %q", body["error"], gw.WorkspaceErrorCodeNotReady)
 	}
 }
 

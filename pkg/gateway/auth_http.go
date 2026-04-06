@@ -10,10 +10,19 @@ import (
 const (
 	AuthErrorCodeUnauthorized = "unauthorized"
 	AuthErrorCodeForbidden    = "forbidden"
+	// WorkspaceErrorCodeUnavailable is returned when the gateway cannot read or create the Workspace CR.
+	WorkspaceErrorCodeUnavailable = "workspace_unavailable"
+	// WorkspaceErrorCodeNotReady is returned when the workspace pod is not listening on ttyd yet.
+	WorkspaceErrorCodeNotReady = "workspace_not_ready"
 )
 
 // WriteJSONAuthError writes {"error": code} with Content-Type application/json.
 func WriteJSONAuthError(w http.ResponseWriter, status int, code string) {
+	WriteJSONError(w, status, code)
+}
+
+// WriteJSONError writes {"error": code} with Content-Type application/json.
+func WriteJSONError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)

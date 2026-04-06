@@ -129,6 +129,25 @@ kubectl get crd workspaces.workspace.devplane.io
 
 Navigate to the URL you configured as `gateway.oidc.redirectURL` (minus `/callback`). You will be redirected to your IdP, and after login the gateway provisions your workspace and drops you into a browser terminal — no separate token, no VPN, no SSH key.
 
+### 4. Smoke-test the WebSocket terminal path (optional)
+
+The browser session uses the gateway WebSocket endpoint `/ws` (ttyd subprotocol `tty`) with the same identity as HTTP: `Authorization: Bearer …`, the `devplane_token` cookie after login, or `?token=` (browsers use the query form because the WebSocket API cannot set custom headers).
+
+**Poll workspace readiness** (200 JSON; `ttydReady` becomes true when the pod accepts TCP on port 7681):
+
+```bash
+curl -sS -H "Authorization: Bearer $ID_TOKEN" "https://devplane.example.com/api/workspace" | python3 -m json.tool
+```
+
+**Connect with [wscat](https://www.npmjs.com/package/wscat)** once `phase` is `Running` and `ttydReady` is true (use `wss://` behind TLS, or `ws://` on a plain port-forward):
+
+```bash
+# OIDC id_token or a copy of the devplane_token cookie value
+wscat -c "wss://devplane.example.com/ws?token=$ID_TOKEN" -s tty
+```
+
+While ttyd is still starting, `/ws` returns **503** with body `{"error":"workspace_not_ready"}`; auth failures return **401/403** with `{"error":"unauthorized"}` or `{"error":"forbidden"}` — same validator as `/api/workspace` before any upgrade.
+
 ### Air-gapped clusters
 
 Mirror the three images to your internal registry before installing:

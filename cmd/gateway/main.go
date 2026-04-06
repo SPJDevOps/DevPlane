@@ -521,19 +521,19 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 
 	ws, err := lifecycle.EnsureWorkspace(r.Context(), namespace, claims)
 	if err != nil {
-		http.Error(w, "Failed to provision workspace", http.StatusInternalServerError)
 		log.Error(err, "EnsureWorkspace failed", "user", claims.UserID)
+		gw.WriteJSONError(w, http.StatusInternalServerError, gw.WorkspaceErrorCodeUnavailable)
 		return
 	}
 
 	// Check that the backend ttyd server is actually accepting connections
 	// before proxying.  If the pod is Running but ttyd hasn't started yet,
-	// serve a loading page so the user gets a clean "workspace starting"
-	// experience instead of a WebSocket dial error.
+	// return 503 with a machine-readable code so clients can retry (same
+	// identity path as above — upgrade never happened).
 	if !gw.BackendReady(ws.Status.ServiceEndpoint) {
 		log.Info("Backend not ready yet, returning 503",
 			"user", claims.UserID, "endpoint", ws.Status.ServiceEndpoint)
-		http.Error(w, "Workspace not ready", http.StatusServiceUnavailable)
+		gw.WriteJSONError(w, http.StatusServiceUnavailable, gw.WorkspaceErrorCodeNotReady)
 		return
 	}
 
