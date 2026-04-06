@@ -7,6 +7,10 @@
 //   - A valid kubeconfig (KUBECONFIG env var or ~/.kube/config)
 //   - The workspace CRD installed (make install)
 //
+// Optional (gateway auth → API smoke):
+//   - E2E_GATEWAY_URL — base URL of the deployed gateway (https://…)
+//   - E2E_ID_TOKEN — OIDC ID token (JWT) for a test user; polls /api/workspace until ttydReady
+//
 // Run with:
 //
 //	go test -v -tags e2e ./test/e2e/ -timeout 5m
@@ -16,9 +20,14 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +40,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
@@ -53,8 +66,8 @@ var testScheme = func() *runtime.Scheme {
 	return s
 }()
 
-// newClient builds a controller-runtime client from the active kubeconfig.
-func newClient(t *testing.T) client.Client {
+// restConfig returns a *rest.Config from KUBECONFIG or ~/.kube/config.
+func restConfig(t *testing.T) *rest.Config {
 	t.Helper()
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	if kubeconfigPath == "" {
@@ -65,11 +78,98 @@ func newClient(t *testing.T) client.Client {
 	if err != nil {
 		t.Fatalf("build kubeconfig from %s: %v", kubeconfigPath, err)
 	}
+	return cfg
+}
+
+// newClient builds a controller-runtime client from the active kubeconfig.
+func newClient(t *testing.T) client.Client {
+	t.Helper()
+	cfg := restConfig(t)
 	c, err := client.New(cfg, client.Options{Scheme: testScheme})
 	if err != nil {
 		t.Fatalf("create k8s client: %v", err)
 	}
 	return c
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// probeTTYDViaPortForward checks that ttyd serves HTTP on :7681 by port-forwarding
+// from the test runner to the workspace pod (cluster DNS is not required locally).
+func probeTTYDViaPortForward(t *testing.T, cfg *rest.Config, namespace, podName string) {
+	t.Helper()
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("kubernetes clientset: %v", err)
+	}
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("portforward")
+
+	transport, upgrader, err := spdy.RoundTripperFor(cfg)
+	if err != nil {
+		t.Fatalf("spdy RoundTripperFor: %v", err)
+	}
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
+
+	stopCh := make(chan struct{}, 1)
+	readyCh := make(chan struct{})
+	fw, err := portforward.New(dialer, []string{":7681"}, stopCh, readyCh, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("portforward.New: %v", err)
+	}
+	go func() {
+		if err := fw.ForwardPorts(); err != nil && !errors.Is(err, portforward.ErrLostConnectionToPod) {
+			t.Logf("port-forward ended: %v", err)
+		}
+	}()
+
+	select {
+	case <-readyCh:
+	case <-time.After(45 * time.Second):
+		close(stopCh)
+		t.Fatal("port-forward did not become ready in time")
+	}
+
+	ports, err := fw.GetPorts()
+	if err != nil || len(ports) == 0 {
+		close(stopCh)
+		t.Fatalf("GetPorts: err=%v ports=%v", err, ports)
+	}
+	localPort := int(ports[0].Local)
+	ttydURL := fmt.Sprintf("http://127.0.0.1:%d/", localPort)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	defer close(stopCh)
+
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, 40*time.Second, true, func(ctx context.Context) (bool, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ttydURL, nil)
+		if err != nil {
+			return false, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false, nil
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode == http.StatusOK, nil
+	}); err != nil {
+		t.Fatalf("ttyd HTTP not reachable via port-forward %s: %v", ttydURL, err)
+	}
+	t.Logf("ttyd responded OK via port-forward %s", ttydURL)
 }
 
 // ensureNamespace creates the e2e test namespace if it does not already exist.
@@ -225,23 +325,40 @@ func TestWorkspaceReconciliation(t *testing.T) {
 		}
 	}
 
-	// Verify the Workspace status transitions to Creating or Running.
-	t.Log("Waiting for Workspace status to reach Creating or Running phase...")
+	// Full ship path: wait for Running, ready pod, then ttyd HTTP via port-forward.
+	t.Log("Waiting for Workspace status to reach Running...")
 	if err := wait.PollUntilContextTimeout(ctx, pollInterval, createTimeout, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, types.NamespacedName{Name: wsName, Namespace: e2eNamespace}, ws); err != nil {
 			return false, err
 		}
 		switch ws.Status.Phase {
-		case "Creating", "Running":
+		case workspacev1alpha1.WorkspacePhaseRunning:
 			return true, nil
-		case "Failed":
+		case workspacev1alpha1.WorkspacePhaseFailed:
 			return false, fmt.Errorf("workspace reached Failed phase: %s", ws.Status.Message)
 		}
 		return false, nil
 	}); err != nil {
-		t.Fatalf("workspace did not reach expected phase: %v (last phase: %s)", err, ws.Status.Phase)
+		t.Fatalf("workspace did not reach Running: %v (last phase: %s)", err, ws.Status.Phase)
 	}
-	t.Logf("Workspace reached phase %q — reconciliation confirmed", ws.Status.Phase)
+	if ws.Status.ServiceEndpoint == "" {
+		t.Fatal("Running workspace missing status.serviceEndpoint")
+	}
+	t.Logf("Workspace Running — serviceEndpoint %q", ws.Status.ServiceEndpoint)
+
+	t.Log("Waiting for workspace pod Ready condition...")
+	if err := wait.PollUntilContextTimeout(ctx, pollInterval, createTimeout, true, func(ctx context.Context) (bool, error) {
+		var pod corev1.Pod
+		if err := c.Get(ctx, types.NamespacedName{Name: podName, Namespace: e2eNamespace}, &pod); err != nil {
+			return false, err
+		}
+		return isPodReady(&pod), nil
+	}); err != nil {
+		t.Fatalf("pod not Ready: %v", err)
+	}
+
+	t.Log("Probing ttyd via port-forward (workspace reachable like gateway would dial it)...")
+	probeTTYDViaPortForward(t, restConfig(t), e2eNamespace, podName)
 }
 
 // TestWorkspaceDeletion verifies that deleting a Workspace CR removes the finalizer
@@ -357,6 +474,59 @@ func TestWorkspaceInvalidSpec(t *testing.T) {
 		t.Error("status.message expected non-empty for invalid spec")
 	}
 	t.Logf("Workspace correctly reached Failed phase: %s", ws.Status.Message)
+}
+
+// TestGatewayWorkspaceAPISmoke calls GET /api/workspace on a live gateway with a Bearer
+// OIDC ID token and waits until ttydReady is true (authenticate → workspace → terminal).
+func TestGatewayWorkspaceAPISmoke(t *testing.T) {
+	base := strings.TrimSpace(os.Getenv("E2E_GATEWAY_URL"))
+	token := strings.TrimSpace(os.Getenv("E2E_ID_TOKEN"))
+	if base == "" || token == "" {
+		t.Skip("set E2E_GATEWAY_URL and E2E_ID_TOKEN to run gateway API smoke")
+	}
+	base = strings.TrimRight(base, "/")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
+	deadline := time.Now().Add(7 * time.Minute)
+	var lastPhase string
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/workspace", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Logf("gateway request error: %v", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Logf("gateway /api/workspace status %d body %s", resp.StatusCode, string(body))
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		var got struct {
+			TTYDReady bool   `json:"ttydReady"`
+			Phase     string `json:"phase"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("decode JSON: %v body=%s", err, string(body))
+		}
+		lastPhase = got.Phase
+		if got.TTYDReady {
+			t.Logf("gateway reports ttydReady=true phase=%s", got.Phase)
+			return
+		}
+		t.Logf("waiting for ttydReady phase=%s", got.Phase)
+		time.Sleep(3 * time.Second)
+	}
+	t.Fatalf("ttydReady never true (last phase %q)", lastPhase)
 }
 
 // pollUntilExists waits until a named resource exists in the cluster.

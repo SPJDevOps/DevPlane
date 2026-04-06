@@ -135,7 +135,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/api/workspace", func(w http.ResponseWriter, r *http.Request) {
-		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, secure, log)
+		handleWorkspaceAPI(w, r, validator, lifecycle, namespace, cookieSecure, log)
 	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWS(w, r, validator, lifecycle, proxy, namespace, log)

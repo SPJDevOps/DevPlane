@@ -1,0 +1,53 @@
+Thank you for installing {{ .Chart.Name }} (release {{ .Release.Name }}).
+
+Your release uses chart version {{ .Chart.Version }} and app version {{ .Chart.AppVersion }}.
+
+## What was installed
+
+- Workspace operator (controller) in namespace `{{ .Release.Namespace }}`.
+{{- if .Values.gateway.enabled }}
+- Gateway in `{{ .Release.Namespace }}`, creating user `Workspace` CRs in namespace `{{ .Values.gateway.workspaceNamespace }}`.
+{{- if and .Values.gateway.createWorkspaceNamespace .Values.gateway.workspaceNamespace }}
+- Namespace `{{ .Values.gateway.workspaceNamespace }}` for workspace pods, PVCs, and services.
+{{- end }}
+{{- end }}
+
+## Before you rely on the gateway (OIDC)
+
+1. Configure OIDC — either set `gateway.oidc.*` in values **or** create the Secret first and set `gateway.oidc.existingSecret`.
+2. Set `gateway.oidc.redirectURL` to your gateway's **public** HTTPS callback URL, e.g. `https://<your-host>/callback`.
+{{- if .Values.gateway.ingress.enabled }}
+3. Ingress host: `{{ .Values.gateway.ingress.host }}` (ensure DNS and TLS match your IdP redirect URL).
+{{- else if .Values.gateway.enabled }}
+3. Expose the gateway Service `{{ .Release.Name }}-gateway` (e.g. LoadBalancer / Ingress) so browsers can reach `/login` and `/callback`.
+{{- end }}
+
+## Verify the install
+
+```bash
+kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ .Release.Name }}-controller-manager
+{{- if .Values.gateway.enabled }}
+kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ .Release.Name }}-gateway
+kubectl -n {{ .Release.Namespace }} get workspaces.workspace.devplane.io -A
+{{- end }}
+```
+
+## Workspace CRDs
+
+CRDs ship in the chart `crds/` directory; Helm installs them before other resources.
+
+## E2E smoke (cluster + kubeconfig)
+
+From a machine with `go` and a working `KUBECONFIG`, after the operator is watching the test namespace:
+
+```bash
+make test-e2e
+```
+
+Optional gateway check (real IdP token):
+
+```bash
+export E2E_GATEWAY_URL=https://your-devplane-host
+export E2E_ID_TOKEN=<OIDC id_token for a test user>
+make test-e2e
+```

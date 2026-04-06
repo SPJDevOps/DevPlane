@@ -17,6 +17,8 @@ operator:
   leaderElect: true
 
 gateway:
+  # When true, set gateway.oidc.* or gateway.oidc.existingSecret; Helm fails fast if
+  # inline OIDC fields are empty (predictable install). Use gateway.enabled=false for operator-only.
   enabled: true
   image:
     repository: ghcr.io/spjdevops/devplane/workspace-gateway
