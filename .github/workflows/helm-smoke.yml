@@ -1,0 +1,64 @@
+# Merge-blocking greenfield Helm install against a disposable kind cluster.
+# Complements unit/integration CI (ci.yml) by catching chart wiring and image pull regressions.
+#
+# Maintenance: see docs/deployment.md → "CI Helm smoke install (kind)".
+
+name: Helm smoke (kind)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: helm-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  helm-smoke:
+    name: Install chart on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          cluster_name: devplane-smoke
+          wait: 180s
+
+      - name: Helm lint (chart + CI values)
+        run: |
+          helm lint deploy/helm/workspace-operator --values deploy/helm/ci-smoke-values.yaml
+
+      - name: Helm install (wait for workloads)
+        run: |
+          helm install devplane-smoke ./deploy/helm/workspace-operator \
+            --namespace devplane-ci \
+            --create-namespace \
+            --values deploy/helm/ci-smoke-values.yaml \
+            --wait \
+            --timeout 15m
+
+      - name: Assert CRDs and Deployments
+        run: |
+          set -euo pipefail
+          kubectl get crd workspaces.workspace.devplane.io
+          kubectl rollout status deployment/devplane-smoke-controller-manager -n devplane-ci --timeout=5m
+          kubectl rollout status deployment/devplane-smoke-gateway -n devplane-ci --timeout=5m
+          kubectl get deploy -n devplane-ci
+          kubectl get ns workspaces

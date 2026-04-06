@@ -712,6 +712,24 @@ kubectl logs -n workspaces <userid>-workspace-pod
 
 ---
 
+## CI Helm smoke install (kind)
+
+**What runs:** On every push and pull request to `main`, GitHub Actions workflow [helm-smoke.yml](../.github/workflows/helm-smoke.yml) creates a single-node [kind](https://kind.sigs.k8s.io/) cluster, runs `helm lint` on the chart with [ci-smoke-values.yaml](../deploy/helm/ci-smoke-values.yaml), then `helm install --wait` and asserts:
+
+- CRD `workspaces.workspace.devplane.io` exists
+- Deployments `{release}-controller-manager` and `{release}-gateway` in the install namespace roll out successfully
+- The `workspaces` namespace exists (chart default)
+
+**Runner requirements:** Standard GitHub-hosted `ubuntu-latest` (Docker-in-Docker for kind). No extra secrets are required; images pull from the public `ghcr.io/spjdevops/devplane/*` repositories pinned by chart `appVersion`.
+
+**OIDC in CI:** `ci-smoke-values.yaml` points `gateway.oidc.issuerURL` at a **public** issuer (`https://accounts.google.com`) so the gateway can complete OIDC discovery on startup (required for the process to stay up). Client credentials are dummy values; the job validates **installability** and **pod readiness**, not a full browser login flow.
+
+**Flake policy:** Transient kind or registry failures should be rare. **Re-run the failed workflow job** once before investigating. Repeated failures on the same commit usually indicate a chart regression, broken image tag, or incompatible default resources.
+
+**Maintenance:** When gateway OIDC becomes required differently, or deployment names change, update `deploy/helm/ci-smoke-values.yaml` and the assertions in `helm-smoke.yml` together. Keep [helm/kind-action](https://github.com/helm/kind-action) and `azure/setup-helm` versions aligned with other workflows (or let Dependabot propose bumps).
+
+---
+
 ## Troubleshooting
 
 ### Workspace stuck in `Creating`

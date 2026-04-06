@@ -1,0 +1,18 @@
+# Values overlay for CI: ephemeral kind cluster (`.github/workflows/helm-smoke.yml`).
+#
+# The gateway binary performs OIDC discovery at startup (`go-oidc` against IssuerURL).
+# Use a public issuer whose `.well-known/openid-configuration` is reachable from GitHub
+# Actions so pods become Ready; client ID/secret are not exercised for login in this job.
+#
+# Keep this file in sync with `gateway-secret.yaml` required fields when OIDC wiring changes.
+
+gateway:
+  replicas: 1
+  oidc:
+    issuerURL: "https://accounts.google.com"
+    clientID: "ci-smoke-not-used.apps.googleusercontent.com"
+    clientSecret: "ci-smoke-not-a-real-secret"
+    redirectURL: "https://localhost/callback"
+
+operator:
+  replicas: 1

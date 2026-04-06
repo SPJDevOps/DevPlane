@@ -3,6 +3,7 @@
 > Browser-based AI coding workspaces on Kubernetes — air-gap friendly, OIDC secured, one Helm install.
 
 [![CI](https://github.com/SPJDevOps/DevPlane/actions/workflows/ci.yml/badge.svg)](https://github.com/SPJDevOps/DevPlane/actions/workflows/ci.yml)
+[![Helm smoke](https://github.com/SPJDevOps/DevPlane/actions/workflows/helm-smoke.yml/badge.svg)](https://github.com/SPJDevOps/DevPlane/actions/workflows/helm-smoke.yml)
 [![Release](https://img.shields.io/github/v/release/SPJDevOps/DevPlane)](https://github.com/SPJDevOps/DevPlane/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./hack/boilerplate.go.txt)
 [![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](https://go.dev)
@@ -405,6 +406,8 @@ make gateway-smoke
 ```
 
 Prerequisites are enforced by the Makefile (both env vars must be set). CI: run the **Gateway E2E smoke** workflow manually from the Actions tab after adding repository secrets `E2E_GATEWAY_URL` and `E2E_ID_TOKEN` — it fails fast with a clear message if secrets are missing.
+
+**Helm / cluster smoke (no secrets):** every PR runs **Helm smoke (kind)** — greenfield `helm install` of the chart on an ephemeral cluster plus CRD and Deployment health checks. See [docs/deployment.md](./docs/deployment.md) → *CI Helm smoke install (kind)* for runner expectations and flake handling.
 
 **Operator + cluster path** (reconcile, optional ttyd HTTP via port-forward): [test/e2e/README.md](test/e2e/README.md) and `make test-e2e`.
 
