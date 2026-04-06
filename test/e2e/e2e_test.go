@@ -16,6 +16,10 @@
 //	go test -v -tags e2e ./test/e2e/ -timeout 5m
 //	# or via make:
 //	make test-e2e
+//
+// Gateway-only smoke (same env vars):
+//
+//	make gateway-smoke
 package e2e
 
 import (

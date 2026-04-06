@@ -3,6 +3,8 @@
 # Jobs:
 #   lint-and-test  – go vet, golangci-lint, unit tests (short mode, fast)
 #   integration    – full envtest suite (etcd + kube-apiserver); enforces 70% coverage
+#
+# Deployed-gateway smoke (manual): .github/workflows/gateway-smoke.yml + make gateway-smoke locally.
 
 name: CI
 

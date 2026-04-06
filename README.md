@@ -313,7 +313,19 @@ go test -run TestIsPodReady ./controllers
 go test -run TestBuildPod ./pkg/workspace
 ```
 
-For a full local walkthrough (workspace image with Docker, full stack with KIND), see [docs/local-development.md](./docs/local-development.md).
+For a full local walkthrough (workspace image with Docker, full stack with KIND — operator, gateway, Dex, Helm), see [docs/local-development.md](./docs/local-development.md). That doc is the authoritative **dev stack** path; run the operator against your cluster with `make run` (see above), and the gateway with `go run ./cmd/gateway` after exporting the OIDC env vars required by [cmd/gateway/main.go](./cmd/gateway/main.go) (or use the Helm-deployed gateway from the same guide).
+
+### Gateway E2E smoke (auth → Workspace CR → ttyd ready)
+
+Against a **live** gateway and IdP, you can automate the same check as “poll `/api/workspace` until `ttydReady` is true”:
+
+```bash
+export E2E_GATEWAY_URL=https://devplane.example.com   # no trailing slash
+export E2E_ID_TOKEN=eyJhbG...                         # OIDC id_token the gateway accepts
+make gateway-smoke
+```
+
+Prerequisites are enforced by the Makefile (both env vars must be set). CI: run the **Gateway E2E smoke** workflow manually from the Actions tab after adding repository secrets `E2E_GATEWAY_URL` and `E2E_ID_TOKEN` — it fails fast with a clear message if secrets are missing.
 
 To publish commits to GitHub (credentials, branch protection, air-gapped options, and how that relates to CI), see [docs/github-publish.md](./docs/github-publish.md).
 
@@ -339,6 +351,7 @@ hack/              Boilerplate and workspace entrypoint script
 | `make test` | Run all tests with coverage |
 | `make lint` | Run golangci-lint |
 | `make build` | Build operator binary |
+| `make gateway-smoke` | Gateway `/api/workspace` smoke (`E2E_GATEWAY_URL`, `E2E_ID_TOKEN`) |
 | `make docker-build` | Build all three images |
 | `make deploy` | Deploy with kustomize |
 

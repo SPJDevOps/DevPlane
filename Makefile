@@ -68,6 +68,15 @@ test-short: fmt vet ## Run tests excluding envtest integration tests (no etcd/ku
 test-e2e: fmt vet ## Run E2E tests against the current kubeconfig cluster (operator must be running).
 	go test -v -tags e2e ./test/e2e/... -timeout 10m
 
+.PHONY: gateway-smoke
+gateway-smoke: fmt vet ## Poll GET /api/workspace until ttydReady (needs E2E_GATEWAY_URL + E2E_ID_TOKEN; see README).
+	@if [ -z "$$E2E_GATEWAY_URL" ] || [ -z "$$E2E_ID_TOKEN" ]; then \
+		echo >&2 "gateway-smoke: set E2E_GATEWAY_URL (gateway base URL, no trailing slash) and E2E_ID_TOKEN (OIDC JWT the gateway accepts)."; \
+		echo >&2 "See README.md (Development → Gateway E2E smoke) and docs/local-development.md."; \
+		exit 1; \
+	fi
+	go test -v -tags e2e ./test/e2e/... -run TestGatewayWorkspaceAPISmoke -timeout 15m
+
 .PHONY: build
 build: fmt vet
 	go build -o bin/manager main.go

@@ -222,7 +222,29 @@ kubectl port-forward -n workspaces pod/localdev-workspace-pod 7681:7681
 
 Open **http://localhost:7681** in your browser for the terminal session.
 
-### 2.7 Teardown
+### 2.7 Gateway API smoke (optional)
+
+With the Helm release from §2.4 running, you can reach the gateway from your machine and run the same automated check as CI’s optional workflow (`TestGatewayWorkspaceAPISmoke`):
+
+1. Port-forward the gateway Service (release name `workspace-operator` → `workspace-operator-gateway`):
+
+   ```bash
+   kubectl port-forward -n workspace-operator-system svc/workspace-operator-gateway 8080:8080
+   ```
+
+2. Obtain an OIDC **ID token** for a user Dex knows (e.g. complete browser login at `http://localhost:8080` and copy the `devplane_token` cookie value, or use your IdP’s token flow).
+
+3. In another terminal:
+
+   ```bash
+   export E2E_GATEWAY_URL=http://localhost:8080
+   export E2E_ID_TOKEN='<paste JWT>'
+   make gateway-smoke
+   ```
+
+The test polls `GET /api/workspace` with `Authorization: Bearer $E2E_ID_TOKEN` until `ttydReady` is true or the timeout is reached. See the root [README.md](../README.md) **Development → Gateway E2E smoke** for the full prerequisite summary.
+
+### 2.8 Teardown
 
 ```bash
 # Delete the KIND cluster (removes all resources)

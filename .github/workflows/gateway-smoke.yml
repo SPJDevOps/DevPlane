@@ -1,0 +1,42 @@
+# Optional gateway proof: polls a *deployed* gateway until /api/workspace reports ttydReady.
+#
+# This does not run on push/PR (no cluster + IdP in CI). Use "Run workflow" manually after
+# configuring repository secrets. Missing secrets fail the job with an explicit error.
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   E2E_GATEWAY_URL — base URL only, e.g. https://devplane.example.com or http://localhost:8080
+#   E2E_ID_TOKEN    — OIDC ID token (JWT) for a user the gateway accepts as Bearer auth
+
+name: Gateway E2E smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gateway-smoke:
+    name: Gateway API smoke (manual)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run gateway smoke test
+        env:
+          E2E_GATEWAY_URL: ${{ secrets.E2E_GATEWAY_URL }}
+          E2E_ID_TOKEN: ${{ secrets.E2E_ID_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${E2E_GATEWAY_URL:-}" ] || [ -z "${E2E_ID_TOKEN:-}" ]; then
+            echo "::error::Configure repository secrets E2E_GATEWAY_URL and E2E_ID_TOKEN, then re-run this workflow. See README.md → Development → Gateway E2E smoke."
+            exit 1
+          fi
+          go test -v -tags e2e ./test/e2e/... -run TestGatewayWorkspaceAPISmoke -timeout 15m
