@@ -36,7 +36,29 @@ The Helm chart creates the `workspaces` namespace by default (`gateway.createWor
 
 Configure via `gateway.rateLimit.lifecycle` and `gateway.rateLimit.websocket`: each block has `globalRPS`, `globalBurst`, `perUserRPS`, and `perUserBurst`. **Zero means unlimited** for that bucket. Per-user keys use the OIDC `sub` claim. When a limit trips, the gateway returns **HTTP 429** with JSON `{"error":"rate_limited"}`, increments `devplane_gateway_rate_limit_hits_total`, and logs `devplane.event=gateway.rate_limit.exceeded`.
 
-**CI-friendly unit tests** exercise the limiter without sleeps (`pkg/gateway/ratelimit_test.go`). For a manual cluster check, temporarily set `lifecycle.perUserBurst: 1` and `lifecycle.perUserRPS: 1`, then fire two authenticated `GET /api/workspace` calls in a tight loop; expect the second to return 429 until the bucket refills.
+**CI-friendly unit tests** exercise the limiter without sleeps (`pkg/gateway/ratelimit_test.go`, `cmd/gateway/main_test.go` — including **per-user-only** `2 RPS / burst 3` cases that assert HTTP 429, JSON `rate_limited`, and `devplane_gateway_rate_limit_hits_total` for `scope="user"`).
+
+**Manual / staging proof (non-zero tuning).** Helm defaults keep all buckets at `0` (unlimited); before calling limits “verified” in production, apply a **non-zero** profile and confirm predictable tripping plus metric/log correlation. Example values fragment (matches automated per-user tests):
+
+```yaml
+gateway:
+  rateLimit:
+    lifecycle:
+      globalRPS: 0
+      globalBurst: 0
+      perUserRPS: 2
+      perUserBurst: 3
+    websocket:
+      globalRPS: 0
+      globalBurst: 0
+      perUserRPS: 2
+      perUserBurst: 3
+```
+
+After OIDC login, issue **four** back-to-back authenticated `GET /api/workspace` requests (same user): the first three may pass the limiter and fail later with `500` if the workspace backend errors; the **fourth** should return **429** with `{"error":"rate_limited"}`. Repeat on `GET /ws` (WebSocket upgrade path): fourth connect attempt should see 429 **before** upgrade. Watch:
+
+- `devplane_gateway_rate_limit_hits_total{endpoint="lifecycle",scope="user"}` (and `endpoint="websocket"`) increment;
+- gateway logs with `devplane.event=gateway.rate_limit.exceeded` and the same `devplane.request_id` as the `X-Request-ID` response header.
 
 **PromQL (examples).**
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 const (
@@ -61,4 +62,10 @@ func RecordJSONAPIError(httpStatus int, code string) {
 // RecordRateLimitHit increments rate-limit rejection counters.
 func RecordRateLimitHit(endpoint, scope string) {
 	rateLimitHits.WithLabelValues(endpoint, scope).Inc()
+}
+
+// RateLimitHitsTotal returns the current value of devplane_gateway_rate_limit_hits_total
+// for the given endpoint and scope labels (for tests and ad-hoc inspection).
+func RateLimitHitsTotal(endpoint, scope string) float64 {
+	return testutil.ToFloat64(rateLimitHits.WithLabelValues(endpoint, scope))
 }

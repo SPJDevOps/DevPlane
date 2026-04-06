@@ -917,6 +917,44 @@ func TestHandleWorkspaceAPI_RateLimited(t *testing.T) {
 	}
 }
 
+// TestHandleWorkspaceAPI_RateLimitedPerUser exercises per-identity limits only (no global bucket),
+// matching a typical prod tune such as perUserRPS=2 and perUserBurst=3. Burst 3 allows three
+// immediate Allows; the fourth hits the limiter with scope "user" before EnsureExists.
+func TestHandleWorkspaceAPI_RateLimitedPerUser(t *testing.T) {
+	rl := gw.NewEndpointLimiter(0, 0, 2, 3)
+	v := &stubValidator{claims: validClaims()}
+	lc := &stubLifecycle{existsErr: errors.New("downstream")}
+
+	before := gw.RateLimitHitsTotal("lifecycle", "user")
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+		r.Header.Set("Authorization", "Bearer tok")
+		handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog(), rl)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d status = %d, want 500 (past rate limit, downstream error)", i+1, w.Code)
+		}
+	}
+
+	w4 := httptest.NewRecorder()
+	r4 := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	r4.Header.Set("Authorization", "Bearer tok")
+	handleWorkspaceAPI(w4, r4, v, lc, "default", false, discardLog(), rl)
+	if w4.Code != http.StatusTooManyRequests {
+		t.Fatalf("fourth request status = %d, want 429", w4.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w4.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.RateLimitErrorCode {
+		t.Errorf("error = %q, want %q", body["error"], gw.RateLimitErrorCode)
+	}
+	if gw.RateLimitHitsTotal("lifecycle", "user") != before+1 {
+		t.Errorf("expected exactly one new lifecycle/user rate-limit hit")
+	}
+}
+
 // TestHandleWS_RateLimited verifies the WebSocket handler returns JSON 429 before upgrade when
 // the WebSocket connect limiter trips (same global 1/1 pattern as TestHandleWorkspaceAPI_RateLimited).
 func TestHandleWS_RateLimited(t *testing.T) {
@@ -944,5 +982,38 @@ func TestHandleWS_RateLimited(t *testing.T) {
 	}
 	if w2.Header().Get("X-Request-ID") == "" {
 		t.Error("expected X-Request-ID header on rate-limited response")
+	}
+}
+
+// TestHandleWS_RateLimitedPerUser mirrors TestHandleWorkspaceAPI_RateLimitedPerUser for the
+// WebSocket connect path (HTTP response before upgrade).
+func TestHandleWS_RateLimitedPerUser(t *testing.T) {
+	rl := gw.NewEndpointLimiter(0, 0, 2, 3)
+	v := &stubValidator{claims: &gw.Claims{Sub: "u1", Email: "u1@test.com", UserID: "u1"}}
+	lc := &stubLifecycle{err: errors.New("downstream")}
+
+	before := gw.RateLimitHitsTotal("websocket", "user")
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		handleWS(w, wsRequest("a"), v, lc, &stubProxy{}, "default", discardLog(), rl)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("request %d status = %d, want 500", i+1, w.Code)
+		}
+	}
+
+	w4 := httptest.NewRecorder()
+	handleWS(w4, wsRequest("a"), v, lc, &stubProxy{}, "default", discardLog(), rl)
+	if w4.Code != http.StatusTooManyRequests {
+		t.Fatalf("fourth request status = %d, want 429", w4.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w4.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["error"] != gw.RateLimitErrorCode {
+		t.Errorf("error = %q, want %q", body["error"], gw.RateLimitErrorCode)
+	}
+	if gw.RateLimitHitsTotal("websocket", "user") != before+1 {
+		t.Errorf("expected exactly one new websocket/user rate-limit hit")
 	}
 }
