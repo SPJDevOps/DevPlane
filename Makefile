@@ -156,3 +156,8 @@ setup-envtest: envtest ## Download etcd and kube-apiserver binaries for envtest 
 .PHONY: tidy
 tidy:
 	go mod tidy
+
+##@ Release
+.PHONY: release-verify
+release-verify: ## Check Chart.yaml version matches appVersion (use ALLOW_CHART_APP_MISMATCH=1 for chart-only hotfixes).
+	@bash hack/release-verify.sh

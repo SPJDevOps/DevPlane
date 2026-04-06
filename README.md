@@ -195,6 +195,8 @@ Multi-arch (`linux/amd64` + `linux/arm64`) images are published to GHCR on every
 
 Helm chart: [https://spjdevops.github.io/DevPlane](https://spjdevops.github.io/DevPlane) — [index.yaml](https://spjdevops.github.io/DevPlane/index.yaml) · [GitHub Releases](https://github.com/SPJDevOps/DevPlane/releases)
 
+**Cutting a release** (tags, changelog, chart `appVersion`, mirror promotion): see [docs/release-process.md](./docs/release-process.md).
+
 ---
 
 ## Configuration

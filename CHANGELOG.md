@@ -9,6 +9,14 @@ DevPlane uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- [docs/release-process.md](./docs/release-process.md) — semver tagging, Helm `version` / `appVersion` policy, maintainer checklist (changelog, tag, GitHub Release notes, mirror promotion), and `make release-verify`.
+
+### Changed
+
+- Aligned Helm chart `appVersion` with chart `version` (`1.1.7`) so default image tags match the chart package for unified releases.
+
 ---
 
 ## [1.0.0] — 2026-02-20

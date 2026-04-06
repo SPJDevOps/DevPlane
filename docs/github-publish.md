@@ -87,5 +87,6 @@ If the secure network cannot talk to GitHub at all:
 
 ## Related documentation
 
+- [release-process.md](./release-process.md) — semver tags, `Chart.yaml`, GHCR images, GitHub Releases, air-gapped mirrors
 - [local-development.md](./local-development.md) — full stack and tests on a workstation
 - [deployment.md](./deployment.md) — Helm install and cluster operations
