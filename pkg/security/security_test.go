@@ -379,6 +379,9 @@ func TestBuildRole(t *testing.T) {
 	if role.Name != "alice-workspace" {
 		t.Errorf("Name = %q, want alice-workspace", role.Name)
 	}
+	if role.Labels["app"] != "workspace" || role.Labels["user"] != "alice" || role.Labels["managed-by"] != "devplane" {
+		t.Errorf("Role labels = %v, want app=workspace user=alice managed-by=devplane", role.Labels)
+	}
 
 	// Verify no write permissions exist in any rule.
 	writeVerbs := map[string]bool{"create": true, "update": true, "patch": true, "delete": true, "deletecollection": true}

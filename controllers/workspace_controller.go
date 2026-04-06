@@ -109,12 +109,18 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Ensure RBAC resources (ServiceAccount, Role, RoleBinding).
 	if err := r.ensureRBAC(ctx, &ws); err != nil {
 		log.Error(err, "Failed to ensure RBAC resources")
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("RBAC reconcile failed: %v", err)); updateErr != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure RBAC: %w (status patch: %v)", err, updateErr)
+		}
 		return ctrl.Result{}, err
 	}
 
 	// Ensure NetworkPolicies (deny-all, egress, ingress-from-gateway).
 	if err := r.ensureNetworkPolicies(ctx, &ws); err != nil {
 		log.Error(err, "Failed to ensure NetworkPolicies")
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("NetworkPolicy reconcile failed: %v", err)); updateErr != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure NetworkPolicies: %w (status patch: %v)", err, updateErr)
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -123,6 +129,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: pvcName}, &pvc); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get PVC")
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("Failed to read PersistentVolumeClaim: %v", err)); updateErr != nil {
+				return ctrl.Result{}, fmt.Errorf("get PVC: %w (status patch: %v)", err, updateErr)
+			}
 			return ctrl.Result{}, err
 		}
 		pvcObj, buildErr := workspace.BuildPVC(&ws, r.Scheme)
@@ -139,6 +148,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, updateErr
 			}
 			return ctrl.Result{}, nil
+		}
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, "", "", "PersistentVolumeClaim created; waiting for volume to bind", ""); updateErr != nil {
+			return ctrl.Result{}, updateErr
 		}
 		log.Info("Created PVC", "pvc", pvcName)
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
@@ -165,6 +177,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: podName}, &pod); err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get Pod")
+			if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseCreating, ws.Status.PodName, ws.Status.ServiceEndpoint, "", fmt.Sprintf("Failed to read Pod: %v", err)); updateErr != nil {
+				return ctrl.Result{}, fmt.Errorf("get Pod: %w (status patch: %v)", err, updateErr)
+			}
 			return ctrl.Result{}, err
 		}
 		podObj, buildErr := workspace.BuildPod(&ws, pvcName, image, r.Scheme, workspace.BuildOpts{
@@ -261,6 +276,17 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check for pod failure conditions.
 	if pod.Status.Phase == corev1.PodFailed {
 		msg := fmt.Sprintf("Pod failed: %s", pod.Status.Reason)
+		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
+			return ctrl.Result{}, updateErr
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if pod.Status.Phase == corev1.PodUnknown {
+		msg := "Pod phase Unknown — cluster node or kubelet may be unavailable"
+		if pod.Status.Message != "" {
+			msg = fmt.Sprintf("Pod phase Unknown: %s", pod.Status.Message)
+		}
 		if updateErr := r.updateStatus(ctx, &ws, workspacev1alpha1.WorkspacePhaseFailed, podName, "", "", msg); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}

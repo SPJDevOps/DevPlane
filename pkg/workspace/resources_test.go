@@ -515,6 +515,12 @@ func TestBuildPod_SecurityContext(t *testing.T) {
 		}
 	})
 
+	t.Run("NoPrivilegedContainer", func(t *testing.T) {
+		if csc != nil && csc.Privileged != nil && *csc.Privileged {
+			t.Error("container SecurityContext.Privileged must not be true")
+		}
+	})
+
 	t.Run("CapabilitiesDropAll", func(t *testing.T) {
 		if csc == nil || csc.Capabilities == nil {
 			t.Fatal("container SecurityContext.Capabilities is nil")

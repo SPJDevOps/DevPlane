@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -517,6 +518,37 @@ func TestReconcile_PodFailed(t *testing.T) {
 	stored := getWS(t, fc, nn)
 	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
 		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
+	}
+}
+
+func TestReconcile_PodUnknown(t *testing.T) {
+	ws := wsWithFinalizer("pod-unknown-ws", "wendy")
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "wendy-workspace-pvc", Namespace: "default"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "wendy-workspace-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "workspace", Image: "workspace:test"}},
+		},
+		Status: corev1.PodStatus{
+			Phase:   corev1.PodUnknown,
+			Message: "node not responding",
+		},
+	}
+	r, fc := newFakeReconciler(t, ws, pvc, pod)
+
+	nn := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	reconcileNN(t, r, nn)
+
+	stored := getWS(t, fc, nn)
+	if stored.Status.Phase != workspacev1alpha1.WorkspacePhaseFailed {
+		t.Errorf("status.phase = %q, want Failed", stored.Status.Phase)
+	}
+	if stored.Status.Message == "" || !strings.Contains(stored.Status.Message, "Unknown") {
+		t.Errorf("status.message = %q, want failure message mentioning Unknown", stored.Status.Message)
 	}
 }
 
