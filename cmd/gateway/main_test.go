@@ -708,10 +708,33 @@ func TestServeLoadingPage_Status200(t *testing.T) {
 
 func TestHandleWorkspaceAPI_MethodNotAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/workspace", nil)
+	r := httptest.NewRequest(http.MethodPut, "/api/workspace", nil)
 	handleWorkspaceAPI(w, r, &stubValidator{}, &stubLifecycle{}, "default", false, discardLog())
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestHandleWorkspaceAPI_POST_OK(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/workspace", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	v := &stubValidator{claims: validClaims()}
+	ws := &workspacev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+	}
+	ws.Status.Phase = workspacev1alpha1.WorkspacePhasePending
+	lc := &stubLifecycle{existsWs: ws}
+	handleWorkspaceAPI(w, r, v, lc, "default", false, discardLog())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got workspaceAPIResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if got.Name != "alice" {
+		t.Errorf("name = %q, want alice", got.Name)
 	}
 }
 

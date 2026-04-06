@@ -293,13 +293,15 @@ type workspaceAPIResponse struct {
 }
 
 // handleWorkspaceAPI returns JSON describing the caller's Workspace CR after
-// EnsureExists (create-or-get). Clients use it for status polling; browsers
-// still use / for the ttyd UI and /ws for the raw terminal WebSocket.
+// EnsureExists (create-or-get). GET and POST are equivalent (POST for clients
+// that treat the call as a non-idempotent "ensure" action). Clients use this
+// for status polling; browsers still use / for the ttyd UI and /ws for the
+// raw terminal WebSocket.
 func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 	validator tokenValidator, lifecycle workspaceLifecycle,
 	namespace string, secure bool, log logr.Logger,
 ) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

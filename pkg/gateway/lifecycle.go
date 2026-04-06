@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
+	worksp "workspace-operator/pkg/workspace"
 )
 
 const (
@@ -58,6 +59,7 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      claims.UserID,
 				Namespace: namespace,
+				Labels:    worksp.Labels(claims.UserID),
 			},
 			Spec: workspacev1alpha1.WorkspaceSpec{
 				User: workspacev1alpha1.UserInfo{
@@ -118,6 +120,7 @@ func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, c
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      claims.UserID,
 				Namespace: namespace,
+				Labels:    worksp.Labels(claims.UserID),
 			},
 			Spec: workspacev1alpha1.WorkspaceSpec{
 				User: workspacev1alpha1.UserInfo{

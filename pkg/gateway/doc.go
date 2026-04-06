@@ -2,6 +2,18 @@
 // validation, workspace lifecycle (create/get Workspace CR), and WebSocket
 // proxy to user workspace pods.
 //
+// Workspace lifecycle HTTP API (requires a valid OIDC bearer token, devplane_token
+// cookie, or ?token= for WebSocket-only callers):
+//
+//   - GET /api/workspace — ensure the Workspace CR exists for the authenticated
+//     user (create if missing) and return JSON: name, namespace, userId, email,
+//     phase, serviceEndpoint, podName, message, ttydReady.
+//   - POST /api/workspace — same as GET (for CLI/tools that prefer POST).
+//
+// Errors use application/json: {"error":"..."} with stable codes for auth
+// failures (unauthorized, forbidden). Cluster or provisioning failures return
+// 500 with {"error":"workspace_unavailable"} (no internal details).
+//
 // OIDC configuration (production): set OIDC_ISSUER_URL and OIDC_CLIENT_ID (plus
 // OIDC_CLIENT_SECRET and OIDC_REDIRECT_URL for the browser login flow). Optional
 // OIDC_AUDIENCE overrides the expected JWT "aud" claim when it differs from the

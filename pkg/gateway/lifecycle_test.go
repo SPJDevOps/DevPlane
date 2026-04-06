@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	workspacev1alpha1 "workspace-operator/api/v1alpha1"
+	worksp "workspace-operator/pkg/workspace"
 )
 
 var testScheme = func() *runtime.Scheme {
@@ -151,6 +152,12 @@ func TestEnsureWorkspace_CreatesNewCR(t *testing.T) {
 	}
 	if ws.Spec.Resources.CPU != "1" {
 		t.Errorf("resources.cpu = %q, want 1", ws.Spec.Resources.CPU)
+	}
+	wantLabels := worksp.Labels("newuser")
+	for k, v := range wantLabels {
+		if ws.Labels[k] != v {
+			t.Errorf("label %q = %q, want %q", k, ws.Labels[k], v)
+		}
 	}
 
 	// Set it to Running to unblock
@@ -370,6 +377,12 @@ func TestEnsureExists_CreatesNewCR(t *testing.T) {
 	}
 	if ws.Spec.Resources.CPU != "1" {
 		t.Errorf("resources.cpu = %q, want 1", ws.Spec.Resources.CPU)
+	}
+	wantLabels := worksp.Labels("newex")
+	for k, v := range wantLabels {
+		if ws.Labels[k] != v {
+			t.Errorf("label %q = %q, want %q", k, ws.Labels[k], v)
+		}
 	}
 	// Brand-new CR has no phase set.
 	if ws.Status.Phase != "" {
