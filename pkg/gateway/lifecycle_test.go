@@ -72,7 +72,7 @@ func TestEnsureWorkspace_CreatesNew(t *testing.T) {
 		t.Fatalf("Update status: %v", err)
 	}
 
-	result, err := lm.EnsureWorkspace(ctx, "default", claims)
+	result, _, err := lm.EnsureWorkspace(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureWorkspace: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestEnsureWorkspace_FailedWorkspace(t *testing.T) {
 	}
 
 	claims := &Claims{Sub: "user2", Email: "user2@test.com", UserID: "user2"}
-	_, err := lm.EnsureWorkspace(ctx, "default", claims)
+	_, _, err := lm.EnsureWorkspace(ctx, "default", claims)
 	if err == nil {
 		t.Fatal("EnsureWorkspace should fail for Failed workspace")
 	}
@@ -136,7 +136,7 @@ func TestEnsureWorkspace_CreatesNewCR(t *testing.T) {
 	// Run in a goroutine since EnsureWorkspace will poll and timeout
 	done := make(chan error, 1)
 	go func() {
-		_, err := lm.EnsureWorkspace(ctx, "default", claims)
+		_, _, err := lm.EnsureWorkspace(ctx, "default", claims)
 		done <- err
 	}()
 
@@ -222,7 +222,7 @@ func TestWaitForRunning_StoppedThenRunning(t *testing.T) {
 		_ = fc.Status().Update(ctx, &updated)
 	}()
 
-	result, err := lm.EnsureWorkspace(ctx, "default", claims)
+	result, _, err := lm.EnsureWorkspace(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureWorkspace: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestWaitForRunning_ContextCancelled(t *testing.T) {
 
 	lm := NewLifecycleManager(fc, log, testConfig())
 	claims := &Claims{Sub: "ctxws", Email: "ctx@test.com", UserID: "ctxws"}
-	_, err := lm.EnsureWorkspace(ctx, "default", claims)
+	_, _, err := lm.EnsureWorkspace(ctx, "default", claims)
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
@@ -335,7 +335,7 @@ func TestLifecycleManager_GetExisting(t *testing.T) {
 
 	lm := NewLifecycleManager(fc, log, testConfig())
 	claims := &Claims{Sub: "existing", Email: "e@test.com", UserID: "existing"}
-	result, err := lm.EnsureWorkspace(ctx, "ns1", claims)
+	result, _, err := lm.EnsureWorkspace(ctx, "ns1", claims)
 	if err != nil {
 		t.Fatalf("EnsureWorkspace: %v", err)
 	}
@@ -365,12 +365,15 @@ func TestEnsureExists_CreatesNewCR(t *testing.T) {
 	lm := NewLifecycleManager(fc, log, testConfig())
 	claims := &Claims{Sub: "newex", Email: "newex@test.com", UserID: "newex"}
 
-	ws, err := lm.EnsureExists(ctx, "default", claims)
+	ws, details, err := lm.EnsureExists(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
 	}
 	if ws == nil {
 		t.Fatal("EnsureExists returned nil workspace")
+	}
+	if !details.Created {
+		t.Error("EnsureExists: expected Created=true for new CR")
 	}
 	if ws.Spec.User.ID != "newex" {
 		t.Errorf("user.id = %q, want newex", ws.Spec.User.ID)
@@ -421,7 +424,7 @@ func TestEnsureExists_ExistingRunningReturnsImmediately(t *testing.T) {
 	lm := NewLifecycleManager(fc, log, testConfig())
 	claims := &Claims{Sub: "runex", Email: "run@test.com", UserID: "runex"}
 
-	result, err := lm.EnsureExists(ctx, "default", claims)
+	result, _, err := lm.EnsureExists(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
 	}
@@ -465,9 +468,12 @@ func TestEnsureExists_StoppedResetsPhase(t *testing.T) {
 	lm := NewLifecycleManager(fc, log, testConfig())
 	claims := &Claims{Sub: "stopex", Email: "stop@test.com", UserID: "stopex"}
 
-	result, err := lm.EnsureExists(ctx, "default", claims)
+	result, details, err := lm.EnsureExists(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
+	}
+	if !details.RestartedFromStopped {
+		t.Error("EnsureExists: expected RestartedFromStopped=true for Stopped workspace")
 	}
 	// Phase, PodName, and Message should be cleared to re-trigger reconciliation.
 	if result.Status.Phase != "" {
@@ -512,7 +518,7 @@ func TestEnsureExists_PendingReturnsWithoutBlocking(t *testing.T) {
 	claims := &Claims{Sub: "pendex", Email: "pend@test.com", UserID: "pendex"}
 
 	// EnsureExists must return immediately — no blocking poll.
-	result, err := lm.EnsureExists(ctx, "default", claims)
+	result, _, err := lm.EnsureExists(ctx, "default", claims)
 	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
 	}

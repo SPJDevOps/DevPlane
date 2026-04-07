@@ -16,6 +16,7 @@ func LogWorkspacePhaseTransition(log logr.Logger, ws *workspacev1alpha1.Workspac
 		uid = ws.Spec.User.ID
 	}
 	log.Info("workspace phase transition",
+		LogKeyAuditSchema, AuditSchemaVersion,
 		LogKeyComponent, ComponentWorkspaceController,
 		LogKeyEvent, EventPhaseTransition,
 		LogKeyWorkspace, ws.Name,

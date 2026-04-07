@@ -11,6 +11,7 @@ DevPlane uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Structured **audit events** for the gateway (OIDC login/callback, workspace ensure, WebSocket session, auth/rate-limit denials) and operator (workspace phase transitions), with stable `devplane.event` identifiers and `devplane.audit.schema_version`. See [docs/audit-events.md](./docs/audit-events.md) for the field model, retention guidance, and SIEM shipping examples (Vector / Fluent Bit).
 - [docs/release-process.md](./docs/release-process.md) — semver tagging, Helm `version` / `appVersion` policy, maintainer checklist (changelog, tag, GitHub Release notes, mirror promotion), and `make release-verify`.
 
 ### Changed

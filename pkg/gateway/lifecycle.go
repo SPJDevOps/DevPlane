@@ -20,6 +20,14 @@ const (
 	workspaceReadyPoll    = 2 * time.Second
 )
 
+// EnsureDetails describes how the Workspace CR was resolved for structured audit logs.
+type EnsureDetails struct {
+	// Created is true if this call created a new Workspace CR.
+	Created bool
+	// RestartedFromStopped is true if a Stopped workspace was cleared to re-provision.
+	RestartedFromStopped bool
+}
+
 // LifecycleConfig holds defaults used when creating new Workspace CRs.
 type LifecycleConfig struct {
 	Providers      []workspacev1alpha1.AIProvider
@@ -45,16 +53,19 @@ func NewLifecycleManager(c client.Client, log logr.Logger, cfg LifecycleConfig) 
 // EnsureWorkspace gets or creates a Workspace CR for claims.UserID in namespace,
 // then waits up to workspaceReadyTimeout for it to reach the Running phase.
 // It also stamps LastAccessed so the idle-timeout controller can track activity.
-func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, error) {
+func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, EnsureDetails, error) {
+	var details EnsureDetails
+
 	key := types.NamespacedName{Name: claims.UserID, Namespace: namespace}
 
 	ws := &workspacev1alpha1.Workspace{}
 	err := m.client.Get(ctx, key, ws)
 	if err != nil && !errors.IsNotFound(err) {
-		return nil, fmt.Errorf("get workspace %q: %w", claims.UserID, err)
+		return nil, details, fmt.Errorf("get workspace %q: %w", claims.UserID, err)
 	}
 
 	if errors.IsNotFound(err) {
+		details.Created = true
 		ws = &workspacev1alpha1.Workspace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      claims.UserID,
@@ -81,13 +92,15 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 		}
 		m.log.Info("Creating Workspace CR", "user", claims.UserID, "namespace", namespace)
 		if err := m.client.Create(ctx, ws); err != nil {
-			return nil, fmt.Errorf("create workspace %q: %w", claims.UserID, err)
+			return nil, details, fmt.Errorf("create workspace %q: %w", claims.UserID, err)
 		}
 	}
 
-	ws, err = m.waitForRunning(ctx, key)
+	var restarted bool
+	ws, restarted, err = m.waitForRunning(ctx, key)
+	details.RestartedFromStopped = restarted
 	if err != nil {
-		return nil, err
+		return nil, details, err
 	}
 
 	// Stamp LastAccessed so the idle-timeout controller can track inactivity.
@@ -98,7 +111,7 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 		m.log.Error(patchErr, "Failed to update LastAccessed", "workspace", ws.Name)
 	}
 
-	return ws, nil
+	return ws, details, nil
 }
 
 // EnsureExists gets or creates the Workspace CR for claims.UserID in namespace
@@ -106,16 +119,19 @@ func (m *LifecycleManager) EnsureWorkspace(ctx context.Context, namespace string
 // If the workspace is Stopped it patches the phase to "" to re-trigger operator
 // reconciliation, then returns the patched workspace.
 // Callers must inspect ws.Status.Phase and ws.Status.ServiceEndpoint.
-func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, error) {
+func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, claims *Claims) (*workspacev1alpha1.Workspace, EnsureDetails, error) {
+	var details EnsureDetails
+
 	key := types.NamespacedName{Name: claims.UserID, Namespace: namespace}
 
 	ws := &workspacev1alpha1.Workspace{}
 	err := m.client.Get(ctx, key, ws)
 	if err != nil && !errors.IsNotFound(err) {
-		return nil, fmt.Errorf("get workspace %q: %w", claims.UserID, err)
+		return nil, details, fmt.Errorf("get workspace %q: %w", claims.UserID, err)
 	}
 
 	if errors.IsNotFound(err) {
+		details.Created = true
 		ws = &workspacev1alpha1.Workspace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      claims.UserID,
@@ -142,60 +158,64 @@ func (m *LifecycleManager) EnsureExists(ctx context.Context, namespace string, c
 		}
 		m.log.Info("Creating Workspace CR", "user", claims.UserID, "namespace", namespace)
 		if err := m.client.Create(ctx, ws); err != nil {
-			return nil, fmt.Errorf("create workspace %q: %w", claims.UserID, err)
+			return nil, details, fmt.Errorf("create workspace %q: %w", claims.UserID, err)
 		}
-		return ws, nil
+		return ws, details, nil
 	}
 
 	// If Stopped, clear the phase so the operator reconcile loop recreates the pod.
 	if ws.Status.Phase == workspacev1alpha1.WorkspacePhaseStopped {
+		details.RestartedFromStopped = true
 		m.log.Info("Restarting stopped workspace", "workspace", key.Name)
 		patchBase := ws.DeepCopy()
 		ws.Status.Phase = ""
 		ws.Status.Message = ""
 		ws.Status.PodName = ""
 		if patchErr := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); patchErr != nil {
-			return nil, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
+			return nil, details, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
 		}
 	}
 
-	return ws, nil
+	return ws, details, nil
 }
 
 // waitForRunning polls until the Workspace reaches Running or the deadline passes.
 // When the workspace is Stopped it patches the status to clear the phase, allowing
 // the operator to recreate the pod, then continues polling.
-func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.NamespacedName) (*workspacev1alpha1.Workspace, error) {
+// The returned bool is true if a Stopped workspace was restarted during the wait.
+func (m *LifecycleManager) waitForRunning(ctx context.Context, key types.NamespacedName) (*workspacev1alpha1.Workspace, bool, error) {
+	var restartedFromStopped bool
 	deadline := time.Now().Add(workspaceReadyTimeout)
 	for time.Now().Before(deadline) {
 		ws := &workspacev1alpha1.Workspace{}
 		if err := m.client.Get(ctx, key, ws); err != nil {
-			return nil, fmt.Errorf("get workspace %q: %w", key.Name, err)
+			return nil, restartedFromStopped, fmt.Errorf("get workspace %q: %w", key.Name, err)
 		}
 		switch ws.Status.Phase {
 		case workspacev1alpha1.WorkspacePhaseRunning:
-			return ws, nil
+			return ws, restartedFromStopped, nil
 		case workspacev1alpha1.WorkspacePhaseFailed:
-			return nil, fmt.Errorf("workspace %q failed: %s", key.Name, ws.Status.Message)
+			return nil, restartedFromStopped, fmt.Errorf("workspace %q failed: %s", key.Name, ws.Status.Message)
 		case workspacev1alpha1.WorkspacePhaseStopped:
 			// Clear the Stopped phase so the operator reconcile loop recreates the pod.
+			restartedFromStopped = true
 			m.log.Info("Restarting stopped workspace", "workspace", key.Name)
 			patchBase := ws.DeepCopy()
 			ws.Status.Phase = ""
 			ws.Status.Message = ""
 			ws.Status.PodName = ""
 			if patchErr := m.client.Status().Patch(ctx, ws, client.MergeFrom(patchBase)); patchErr != nil {
-				return nil, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
+				return nil, restartedFromStopped, fmt.Errorf("restart stopped workspace %q: %w", key.Name, patchErr)
 			}
 		}
 		m.log.Info("Waiting for workspace", "workspace", key.Name, "phase", ws.Status.Phase)
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, restartedFromStopped, ctx.Err()
 		case <-time.After(workspaceReadyPoll):
 		}
 	}
-	return nil, fmt.Errorf("workspace %q not ready after %s", key.Name, workspaceReadyTimeout)
+	return nil, restartedFromStopped, fmt.Errorf("workspace %q not ready after %s", key.Name, workspaceReadyTimeout)
 }
 
 // TouchLastAccessed stamps the workspace's LastAccessed to now.

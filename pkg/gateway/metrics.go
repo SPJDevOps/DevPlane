@@ -12,6 +12,9 @@ const (
 	// Log keys for gateway structured logs (match operator conventions where possible).
 	LogKeyComponent = "devplane.component"
 	LogKeyEvent     = "devplane.event"
+	LogKeyUserID    = "userId"
+	LogKeyNamespace = "namespace"
+	LogKeyWorkspace = "workspace"
 )
 
 // Gateway component value for structured logs.

@@ -16,13 +16,19 @@ const (
 	LogKeyUserID    = "userId"
 	LogKeyFromPhase = "fromPhase"
 	LogKeyToPhase   = "toPhase"
+
+	// LogKeyAuditSchema is included on operator audit records (matches gateway).
+	LogKeyAuditSchema = "devplane.audit.schema_version"
 )
+
+// AuditSchemaVersion is bumped only when the audit field set changes incompatibly.
+const AuditSchemaVersion = "1"
 
 // Operator component value for structured logs.
 const ComponentWorkspaceController = "workspace-controller"
 
 // Event names for structured logs (stable identifiers).
-const EventPhaseTransition = "workspace.phase.transition"
+const EventPhaseTransition = "devplane.audit.workspace.phase_transition"
 
 var (
 	// WorkspacePhaseTransitions counts successful status patches where Phase changed.

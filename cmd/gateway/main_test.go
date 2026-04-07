@@ -37,12 +37,12 @@ type stubLifecycle struct {
 	existsErr error
 }
 
-func (l *stubLifecycle) EnsureExists(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, error) {
-	return l.existsWs, l.existsErr
+func (l *stubLifecycle) EnsureExists(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, gw.EnsureDetails, error) {
+	return l.existsWs, gw.EnsureDetails{}, l.existsErr
 }
 
-func (l *stubLifecycle) EnsureWorkspace(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, error) {
-	return l.ws, l.err
+func (l *stubLifecycle) EnsureWorkspace(_ context.Context, _ string, _ *gw.Claims) (*workspacev1alpha1.Workspace, gw.EnsureDetails, error) {
+	return l.ws, gw.EnsureDetails{}, l.err
 }
 
 func (l *stubLifecycle) TouchLastAccessed(_ context.Context, _ *workspacev1alpha1.Workspace) {}

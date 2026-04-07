@@ -45,9 +45,9 @@ type tokenValidator interface {
 // workspaceLifecycle creates or retrieves the user's workspace and tracks activity.
 type workspaceLifecycle interface {
 	// EnsureExists gets or creates the Workspace CR and returns immediately.
-	EnsureExists(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, error)
+	EnsureExists(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, gw.EnsureDetails, error)
 	// EnsureWorkspace gets or creates the Workspace CR and blocks until Running.
-	EnsureWorkspace(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, error)
+	EnsureWorkspace(ctx context.Context, namespace string, claims *gw.Claims) (*workspacev1alpha1.Workspace, gw.EnsureDetails, error)
 	TouchLastAccessed(ctx context.Context, ws *workspacev1alpha1.Workspace)
 }
 
@@ -321,6 +321,7 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	rawToken, err := extractToken(r)
 	if err != nil {
+		gw.LogAuthTokenRejected(log, reqID, r.RemoteAddr, "missing_token", http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		return
 	}
@@ -335,6 +336,7 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 			Secure:   secure,
 		})
 		st, code := gw.AuthErrorResponse(err)
+		gw.LogAuthTokenRejected(log, reqID, r.RemoteAddr, "invalid_token", st, code)
 		gw.WriteJSONAuthError(w, st, code)
 		return
 	}
@@ -342,15 +344,17 @@ func handleWorkspaceAPI(w http.ResponseWriter, r *http.Request,
 		gw.RecordRateLimitHit("lifecycle", scope)
 		log.Info("Rate limit exceeded", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventRateLimited,
 			"scope", scope, "user", claims.UserID)
+		gw.LogRateLimitAudit(log, reqID, "lifecycle", scope, claims.UserID)
 		gw.WriteJSONError(w, http.StatusTooManyRequests, gw.RateLimitErrorCode)
 		return
 	}
-	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
+	ws, details, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
 	if err != nil {
 		log.Error(err, "EnsureExists failed (API)", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
 		gw.WriteJSONError(w, http.StatusInternalServerError, gw.WorkspaceErrorCodeUnavailable)
 		return
 	}
+	gw.LogWorkspaceLifecycleAudit(log, "audit: workspace ensure (API)", reqID, gw.EventAuditWorkspaceEnsureExists, namespace, claims, ws, details)
 	ready := ws.Status.Phase == workspacev1alpha1.WorkspacePhaseRunning &&
 		ws.Status.ServiceEndpoint != "" &&
 		gw.BackendReady(ws.Status.ServiceEndpoint)
@@ -381,6 +385,8 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 // handleLogin initiates the OIDC authorization code flow by setting a CSRF
 // state cookie and redirecting the browser to the identity provider.
 func handleLogin(w http.ResponseWriter, r *http.Request, cfg oauthConfig, secure bool, log logr.Logger) {
+	reqID := gw.RequestID(w, r)
+	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	state := uuid.NewString()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "devplane_state",
@@ -391,6 +397,10 @@ func handleLogin(w http.ResponseWriter, r *http.Request, cfg oauthConfig, secure
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+	gw.LogAudit(log, "audit: OIDC login redirect", reqID, gw.EventAuditOIDCLoginRedirect,
+		gw.LogKeyAuditOutcome, gw.OutcomeSuccess,
+		"remote", r.RemoteAddr,
+	)
 	log.Info("Redirecting to IdP", "remote", r.RemoteAddr)
 	http.Redirect(w, r, cfg.AuthCodeURL(state), http.StatusFound)
 }
@@ -401,12 +411,16 @@ func handleLogin(w http.ResponseWriter, r *http.Request, cfg oauthConfig, secure
 func handleCallback(w http.ResponseWriter, r *http.Request,
 	cfg oauthConfig, validator tokenValidator, secure bool, log logr.Logger,
 ) {
+	reqID := gw.RequestID(w, r)
+	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	stateCookie, err := r.Cookie("devplane_state")
 	if err != nil {
+		gw.LogOIDCCallbackFailure(log, reqID, "missing_state_cookie")
 		http.Error(w, "Missing state cookie", http.StatusBadRequest)
 		return
 	}
 	if r.URL.Query().Get("state") != stateCookie.Value {
+		gw.LogOIDCCallbackFailure(log, reqID, "state_mismatch")
 		http.Error(w, "State mismatch", http.StatusBadRequest)
 		return
 	}
@@ -424,18 +438,22 @@ func handleCallback(w http.ResponseWriter, r *http.Request,
 	token, err := cfg.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
 		log.Error(err, "Token exchange failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventOIDCTokenExchange)
+		gw.LogOIDCCallbackFailure(log, reqID, "token_exchange_failed")
 		http.Error(w, "Token exchange failed", http.StatusBadGateway)
 		return
 	}
 
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok || rawIDToken == "" {
+		gw.LogOIDCCallbackFailure(log, reqID, "missing_id_token")
 		http.Error(w, "Missing id_token in token response", http.StatusBadGateway)
 		return
 	}
 
-	if _, err := validator.Validate(r.Context(), rawIDToken); err != nil {
+	claims, err := validator.Validate(r.Context(), rawIDToken)
+	if err != nil {
 		log.Info("Invalid ID token after OAuth exchange", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventOIDCInvalidIDToken, "error", err.Error())
+		gw.LogOIDCCallbackFailure(log, reqID, "invalid_id_token")
 		http.Error(w, "Invalid ID token", http.StatusUnauthorized)
 		return
 	}
@@ -453,6 +471,8 @@ func handleCallback(w http.ResponseWriter, r *http.Request,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+
+	gw.LogOIDCCallbackSuccess(log, reqID, claims)
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -486,7 +506,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	ws, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
+	ws, _, err := lifecycle.EnsureExists(r.Context(), namespace, claims)
 	if err != nil {
 		http.Error(w, "Failed to provision workspace", http.StatusInternalServerError)
 		log.Error(err, "EnsureExists failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
@@ -530,6 +550,7 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	log = log.WithValues(gw.LogKeyRequestID, reqID)
 	rawToken, err := extractToken(r)
 	if err != nil {
+		gw.LogAuthTokenRejected(log, reqID, r.RemoteAddr, "missing_token", http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		gw.WriteJSONAuthError(w, http.StatusUnauthorized, gw.AuthErrorCodeUnauthorized)
 		log.Info("Missing token", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventAuthFailure, "remote", r.RemoteAddr)
 		return
@@ -538,6 +559,7 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	claims, err := validator.Validate(r.Context(), rawToken)
 	if err != nil {
 		st, code := gw.AuthErrorResponse(err)
+		gw.LogAuthTokenRejected(log, reqID, r.RemoteAddr, "invalid_token", st, code)
 		gw.WriteJSONAuthError(w, st, code)
 		log.Info("Token validation failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventAuthFailure, "remote", r.RemoteAddr, "status", st, "code", code)
 		return
@@ -546,16 +568,18 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 		gw.RecordRateLimitHit("websocket", scope)
 		log.Info("Rate limit exceeded", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventRateLimited,
 			"scope", scope, "user", claims.UserID)
+		gw.LogRateLimitAudit(log, reqID, "websocket", scope, claims.UserID)
 		gw.WriteJSONError(w, http.StatusTooManyRequests, gw.RateLimitErrorCode)
 		return
 	}
 
-	ws, err := lifecycle.EnsureWorkspace(r.Context(), namespace, claims)
+	ws, details, err := lifecycle.EnsureWorkspace(r.Context(), namespace, claims)
 	if err != nil {
 		log.Error(err, "EnsureWorkspace failed", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWorkspaceError, "user", claims.UserID)
 		gw.WriteJSONError(w, http.StatusInternalServerError, gw.WorkspaceErrorCodeUnavailable)
 		return
 	}
+	gw.LogWorkspaceLifecycleAudit(log, "audit: workspace ensure (WebSocket)", reqID, gw.EventAuditWorkspaceEnsureRunning, namespace, claims, ws, details)
 
 	// Check that the backend ttyd server is actually accepting connections
 	// before proxying.  If the pod is Running but ttyd hasn't started yet,
@@ -570,6 +594,14 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	backendURL := gw.BackendURL(ws.Status.ServiceEndpoint)
+	gw.LogAudit(log, "audit: WebSocket session start", reqID, gw.EventAuditWSSessionStart,
+		gw.LogKeyActorSubject, claims.Sub,
+		gw.LogKeyUserID, claims.UserID,
+		gw.LogKeyNamespace, namespace,
+		gw.LogKeyWorkspace, ws.Name,
+		gw.LogKeyAuditOutcome, gw.OutcomeSuccess,
+		"backendHost", ws.Status.ServiceEndpoint,
+	)
 	log.Info("Proxying WebSocket", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxyStart, "user", claims.UserID, "backend", backendURL)
 
 	// Rate-limited activity callback: update LastAccessed at most once per minute
@@ -584,6 +616,14 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	if err := proxy.ServeWS(w, r, backendURL, onActivity); err != nil {
+		gw.LogAudit(log, "audit: WebSocket session end", reqID, gw.EventAuditWSSessionEnd,
+			gw.LogKeyActorSubject, claims.Sub,
+			gw.LogKeyUserID, claims.UserID,
+			gw.LogKeyNamespace, namespace,
+			gw.LogKeyWorkspace, ws.Name,
+			gw.LogKeyAuditOutcome, gw.OutcomeSuccess,
+			gw.LogKeyAuditReason, err.Error(),
+		)
 		log.Info("WebSocket session ended", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxySessionEnd, "user", claims.UserID, "reason", err.Error())
 	}
 }
