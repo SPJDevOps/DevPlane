@@ -51,7 +51,7 @@ type stubProxy struct {
 	err error
 }
 
-func (p *stubProxy) ServeWS(w http.ResponseWriter, _ *http.Request, _ string, _ func()) error {
+func (p *stubProxy) ServeWS(w http.ResponseWriter, _ *http.Request, _ string, _ func(), _ gw.FrameObserver) error {
 	// Simulate a successful upgrade by writing 101; real upgrades are tested in proxy_test.go.
 	w.WriteHeader(http.StatusSwitchingProtocols)
 	return p.err

@@ -53,7 +53,7 @@ type workspaceLifecycle interface {
 
 // wsProxy proxies a WebSocket connection to a backend URL.
 type wsProxy interface {
-	ServeWS(w http.ResponseWriter, r *http.Request, backendURL string, onActivity func()) error
+	ServeWS(w http.ResponseWriter, r *http.Request, backendURL string, onActivity func(), onFrame gw.FrameObserver) error
 }
 
 // oauthConfig abstracts *oauth2.Config for testability.
@@ -594,6 +594,20 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	backendURL := gw.BackendURL(ws.Status.ServiceEndpoint)
+	recorder := gw.NewSessionRecorder(log, gw.SessionRecordingConfigFromEnv(), gw.SessionMeta{
+		RequestID: reqID,
+		Subject:   claims.Sub,
+		UserID:    claims.UserID,
+		Namespace: namespace,
+		Workspace: ws.Name,
+		Backend:   ws.Status.ServiceEndpoint,
+		Remote:    r.RemoteAddr,
+	})
+	onFrame := gw.FrameObserver(func(direction string, msgType int, payload []byte) {
+		if recorder != nil {
+			recorder.RecordFrame(direction, msgType, payload)
+		}
+	})
 	gw.LogAudit(log, "audit: WebSocket session start", reqID, gw.EventAuditWSSessionStart,
 		gw.LogKeyActorSubject, claims.Sub,
 		gw.LogKeyUserID, claims.UserID,
@@ -615,7 +629,10 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 		lifecycle.TouchLastAccessed(r.Context(), ws)
 	}
 
-	if err := proxy.ServeWS(w, r, backendURL, onActivity); err != nil {
+	if err := proxy.ServeWS(w, r, backendURL, onActivity, onFrame); err != nil {
+		if recorder != nil {
+			recorder.Close(err)
+		}
 		gw.LogAudit(log, "audit: WebSocket session end", reqID, gw.EventAuditWSSessionEnd,
 			gw.LogKeyActorSubject, claims.Sub,
 			gw.LogKeyUserID, claims.UserID,
@@ -625,6 +642,10 @@ func handleWS(w http.ResponseWriter, r *http.Request,
 			gw.LogKeyAuditReason, err.Error(),
 		)
 		log.Info("WebSocket session ended", gw.LogKeyComponent, gw.ComponentGateway, gw.LogKeyEvent, gw.EventWSProxySessionEnd, "user", claims.UserID, "reason", err.Error())
+		return
+	}
+	if recorder != nil {
+		recorder.Close(nil)
 	}
 }
 

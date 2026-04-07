@@ -55,6 +55,26 @@ Operational/diagnostic events (e.g. `gateway.ws.proxy.start`) may still appear a
 - Treat audit-bearing streams like security-relevant application logs: **default 90–365 days** depending on policy; shorter for high-volume debug namespaces.
 - Keep gateway and operator logs in **separate** indexes or buckets when possible so workspace lifecycle volume can be tiered independently of OIDC/UI traffic.
 
+## Optional session recording (DEV-56)
+
+For stricter forensic workflows, gateway WebSocket sessions can be recorded as
+hash-chained records plus an immutable manifest:
+
+- `SESSION_RECORDING_ENABLED=true` enables capture.
+- `SESSION_RECORDING_MODE=metadata|full` (default `metadata`).
+  - `metadata`: records timestamps, direction, frame size, per-frame SHA256.
+  - `full`: adds base64 payload bytes per frame (privacy-sensitive).
+- `SESSION_RECORDING_DIR=/tmp/devplane-sessions` output directory.
+
+Artifacts per session:
+
+- `<session-id>.ndjson` — ordered frame records including `prevHash` and `entryHash`.
+- `<session-id>.manifest.json` — final hash, frame count, close time/reason, actor/workspace metadata.
+
+Integrity verification is straightforward: replay each NDJSON entry and confirm
+that `entryHash` matches the expected hash-chain and that the manifest `finalHash`
+equals the last entry hash.
+
 ## Shipping to a SIEM (Vector)
 
 Example: read container stdout JSON, tag by `devplane.event`, forward to Splunk HTTP Event Collector (replace URL/token).

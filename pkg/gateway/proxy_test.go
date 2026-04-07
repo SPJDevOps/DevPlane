@@ -71,7 +71,7 @@ func TestCopyFrames_ForwardsMessages(t *testing.T) {
 	// and the test goroutine (reader).
 	errc := make(chan error, 1)
 	var activityCalled atomic.Bool
-	go copyFrames(dstClientConn, src, errc, func() { activityCalled.Store(true) })
+	go copyFrames(dstClientConn, src, "client_to_backend", errc, func() { activityCalled.Store(true) }, nil)
 
 	// Inject a message through srcClientConn; the server-side (src) sees it and
 	// copyFrames relays it to dstClientConn, which sends it to dstSrv handler.
@@ -121,7 +121,7 @@ func TestServeWS(t *testing.T) {
 
 	// Frontend: an HTTP server that calls ServeWS to proxy to the backend.
 	frontend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := proxy.ServeWS(w, r, backendWSURL, nil); err != nil {
+		if err := proxy.ServeWS(w, r, backendWSURL, nil, nil); err != nil {
 			// Errors after the tunnel is set up are normal on close.
 			t.Logf("ServeWS: %v", err)
 		}
@@ -185,7 +185,7 @@ func TestServeWS_SubprotocolForwarded(t *testing.T) {
 
 	// Frontend: proxies to backend via ServeWS.
 	frontend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := proxy.ServeWS(w, r, backendWSURL, nil); err != nil {
+		if err := proxy.ServeWS(w, r, backendWSURL, nil, nil); err != nil {
 			t.Logf("ServeWS: %v", err)
 		}
 	}))
