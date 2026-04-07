@@ -184,7 +184,7 @@ helm install workspace-operator deploy/helm/workspace-operator \
 kubectl get pods -n workspace-operator-system
 ```
 
-Both the operator and gateway pods should reach `Running` (gateway may stay in a non-ready state — this is expected while it is a placeholder).
+Both the operator and gateway pods should reach `Running` with readiness passing (`1/1` READY). The chart configures liveness and readiness against `GET /health` on the gateway HTTP port. If the gateway stays `0/1` Ready, inspect `kubectl logs deploy/workspace-operator-gateway -n workspace-operator-system` for OIDC or configuration errors (wrong `issuerURL`, unreachable Dex, invalid client secret) — not an incomplete implementation.
 
 ### 2.6 Create a test Workspace and access it
 

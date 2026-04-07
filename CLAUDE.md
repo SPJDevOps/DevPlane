@@ -36,7 +36,7 @@ After modifying `api/v1alpha1/workspace_types.go`, always run `make manifests ge
 Three components, each with its own Dockerfile:
 
 1. **Operator** (`main.go`, `controllers/`, `pkg/workspace/`) — Watches `Workspace` CRDs, reconciles Pod + PVC + headless Service per workspace. Phase 1 complete.
-2. **Gateway** (`cmd/gateway/main.go`, `pkg/gateway/`) — OIDC auth, workspace lifecycle API, WebSocket proxy to pods. Phase 2, currently placeholder.
+2. **Gateway** (`cmd/gateway/main.go`, `pkg/gateway/`) — OIDC auth, workspace lifecycle API, WebSocket proxy to pods. Phase 2 complete (see `CHANGELOG.md`).
 3. **Workspace Pod** (`Dockerfile.workspace`) — Ubuntu 24.04 container with ttyd, tmux, git, OpenCoder. Non-root (UID 1000), read-only root filesystem.
 
 **User flow:** Browser → Gateway (OIDC) → creates/gets Workspace CR → Operator provisions Pod+PVC+Service → Gateway proxies WebSocket to Pod's ttyd (port 7681).
