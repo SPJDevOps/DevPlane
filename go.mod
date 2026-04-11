@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
-	github.com/go-jose/go-jose/v4 v4.1.3
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/zapr v1.3.0
 	github.com/google/uuid v1.6.0
